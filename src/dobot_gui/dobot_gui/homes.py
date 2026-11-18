@@ -21,11 +21,6 @@ from .widgets import Cartao, com_icone, rotulo
 # do Controle Juntas.
 HOMES = (
     ('controle_juntas', 'Home do Controle Juntas'),
-    ('celula_carga', 'Home da Célula de Carga'),
-    ('alinhamento_mesa', 'Home do Alinhamento da Mesa'),
-    ('coletas', 'Home das Coletas'),
-    ('tatil_5x5', 'Home do Tátil 5×5'),
-    ('tatil_4x4', 'Home do Tátil 4×4'),
 )
 NOME_HOME = dict(HOMES)
 # A home "padrão" da plataforma (janela.home_joints): a do Controle Juntas, que

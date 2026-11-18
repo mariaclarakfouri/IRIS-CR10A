@@ -14,8 +14,7 @@ Argumentos:
     sensor    false | true (default false) — gêmeo com o sensor inercial S02 na ponta
     celula    false | true (default false) — célula de carga FA7155 com a ponteira na
               ponta: gêmeo com a célula, SEGURANÇA e peso do robô com a geometria
-              dela (vale também no robô real) e o nó celula_carga lendo a célula
-              (no gêmeo, a força simulada). Não dá para usar junto com sensor:=true.
+              dela (vale também no robô real). Não dá para usar junto com sensor:=true.
 
 Exemplos:
     ros2 launch dobot_control dobot_bringup.launch.py
@@ -29,50 +28,6 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-
-
-# --- Coletas (aba Coletas): os nós do cr10twin, pacote dobot_coletas ---
-# Os valores são os padrões do tactile_cell.launch.py do cr10twin.
-PASTA_COLETAS = os.path.expanduser('~/iris_registros/coletas')
-PASTA_CONFIG_COLETAS = os.path.expanduser('~/.config/iris_coletas')
-SERVOJ_PERIODO_S = 0.030
-
-
-def _nos_coletas(modo, com_gemeo):
-    """Leitor da célula (contrato /load_cell/*), explorador e registrador."""
-    try:
-        get_package_share_directory('dobot_coletas')
-    except Exception:
-        return []                      # pacote das coletas não compilado
-    env = {'TOUCH_PACK_DATA_DIR': PASTA_COLETAS,
-           'TOUCH_PACK_CONFIG_DIR': PASTA_CONFIG_COLETAS}
-    nos = []
-    if modo == 'sim':
-        # Força do sensor simulado do gêmeo (o IRIS publica em /sim/celula).
-        nos.append(Node(package='dobot_coletas', executable='sim_force_bridge',
-                        name='sim_force_bridge', output='screen', additional_env=env,
-                        parameters=[{'use_sim_time': True}],
-                        remappings=[('/sim/load_cell/wrench', '/sim/celula/wrench')]))
-    else:
-        # Dono da porta da célula, com os padrões do cr10twin.
-        nos.append(Node(package='dobot_coletas', executable='ft_receiver',
-                        name='ft_receiver', output='screen', additional_env=env,
-                        parameters=[{'ft_serial_port': '', 'ft_mode': 'polled',
-                                     'ft_baud': 1000000, 'ft_autozero': False,
-                                     'ft_filter': True}]))
-    if not com_gemeo:
-        return nos                     # o explorador move o gêmeo: sem ele, sem coletas
-    nos.append(Node(package='dobot_coletas', executable='tactile_explorer',
-                    name='tactile_explorer', output='screen', additional_env=env,
-                    parameters=[{'arm_base_z': 0.78, 'use_sim_time': True,
-                                 'learned_contact_persist': False,
-                                 'servoj_period_s': SERVOJ_PERIODO_S}]))
-    if modo == 'sim':
-        return nos                     # no gêmeo nada é gravado (a força é simulada)
-    nos.append(Node(package='dobot_coletas', executable='palpation_logger',
-                    name='palpation_logger', output='screen', additional_env=env,
-                    parameters=[{'sensor': '5'}]))
-    return nos
 
 
 def _setup(context):
@@ -119,18 +74,6 @@ def _setup(context):
                                    'sensor' if sensor.lower() in ('true', '1', 'sim') else 'nada')}],
         ),
     ]
-    if celula:
-        # Leitura da célula para a aba Célula de Carga. No robô real quem abre a
-        # porta é o ft_receiver do cr10twin (abaixo), e este nó só o ouve.
-        actions.append(Node(
-            package='dobot_celula',
-            executable='celula_carga',
-            name='celula_carga',
-            output='screen',
-            parameters=[{'modo': modo, 'fonte': 'ft_receiver'}],
-        ))
-        actions += _nos_coletas(modo, gemeo or modo == 'sim')
-
     if gemeo or modo == 'sim':
         actions.append(IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(
