@@ -7,8 +7,8 @@ o "Ir para a home" fica travado até você gravar uma.
 
 O cartão `CartaoHome` é o mesmo em todas as abas: as 6 juntas, "Usar posição
 atual" (só preenche os campos), "Gravar home" (pede confirmação e salva) e "Ir
-para a home" (pede confirmação e move, com a mesma verificação de segurança de
-todo movimento). A barra de cima da interface lista todas as homes.
+para a home" (pede confirmação e move). A barra de cima da interface lista todas
+as homes.
 """
 from PyQt5.QtWidgets import (QDoubleSpinBox, QGridLayout, QHBoxLayout, QPushButton,
                              QVBoxLayout, QWidget)
@@ -21,6 +21,7 @@ from .widgets import Cartao, com_icone, rotulo
 # do Controle Juntas.
 HOMES = (
     ('controle_juntas', 'Home do Controle Juntas'),
+    ('celula_carga', 'Home da Célula de Carga'),
 )
 NOME_HOME = dict(HOMES)
 # A home "padrão" da plataforma (janela.home_joints): a do Controle Juntas, que

@@ -8,12 +8,7 @@ conexão com o dobot_action_server e não comanda o robô em nada.
 Formato do pacote (o mesmo que o real_driver.py do cr10twin usa): começa com
 MessageSize = 1440 (uint16 little-endian) e traz q_actual — 6 float64 em graus —
 no byte 432.
-
-Durante uma coleta (aba Coletas) quem move o gêmeo é o explorador do cr10twin, e
-o robô real é que segue o gêmeo. Então, com a coleta armada ou em andamento
-(/dobot/coleta_estado, publicado pelo dobot_action_server), este nó fica quieto.
 """
-import json
 import math
 import socket
 import struct
@@ -23,7 +18,6 @@ import time
 import rclpy
 from builtin_interfaces.msg import Duration
 from rclpy.node import Node
-from std_msgs.msg import String
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 from .conversao import JOINT_NAMES, dobot_deg_to_urdf_rad
@@ -36,8 +30,6 @@ RECONNECT_BACKOFF_S = (2.0, 5.0, 10.0)
 STALE_AFTER_S = 0.5          # sem pacote novo há mais que isso = não publica
 FIRST_MOVE_S = 3.0           # primeira sincronização: o gêmeo vai até a pose real devagar
 TRAJECTORY_TOPIC = '/cr10_group_controller/joint_trajectory'
-FASES_PARADAS = ('IDLE', 'DONE', 'ABORTED', 'FROZEN')
-COLETA_ESTADO_VELHO_S = 2.0  # sem notícia do servidor há mais que isso: volta a espelhar
 
 
 def parse_q_actual(packet):
@@ -67,9 +59,6 @@ class EspelhoNode(Node):
         self._q_time = 0.0
         self._synced = False
         self._stop = threading.Event()
-        self._coleta = False
-        self._coleta_t = 0.0
-        self.create_subscription(String, '/dobot/coleta_estado', self._on_coleta, 10)
 
         threading.Thread(target=self._reader_loop, daemon=True).start()
         self.create_timer(self._periodo, self._publish)
@@ -121,25 +110,9 @@ class EspelhoNode(Node):
                     self._q_deg = latest
                     self._q_time = time.monotonic()
 
-    # --- coleta ---
-
-    def _on_coleta(self, msg):
-        try:
-            estado = json.loads(msg.data)
-        except ValueError:
-            return
-        coleta = bool(estado.get('armada')) or str(estado.get('fase', 'IDLE')) not in FASES_PARADAS
-        if coleta and not self._coleta:
-            self.get_logger().info('Coleta em andamento: o gêmeo segue o explorador.')
-        elif not coleta and self._coleta:
-            self.get_logger().info('Coleta encerrada: o gêmeo volta a espelhar o robô real.')
-        self._coleta, self._coleta_t = coleta, time.monotonic()
-
     # --- publicação para o Gazebo ---
 
     def _publish(self):
-        if self._coleta and time.monotonic() - self._coleta_t < COLETA_ESTADO_VELHO_S:
-            return
         with self._lock:
             q = None if self._q_deg is None else list(self._q_deg)
             age = time.monotonic() - self._q_time

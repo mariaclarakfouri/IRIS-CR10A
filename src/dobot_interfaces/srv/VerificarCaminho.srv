@@ -1,6 +1,0 @@
-# Confere, SEM mover o robô, se o caminho da posição atual até `joints`
-# passa pela verificação de segurança (a mesma usada antes de cada movimento).
-float64[6] joints
----
-bool seguro
-string message

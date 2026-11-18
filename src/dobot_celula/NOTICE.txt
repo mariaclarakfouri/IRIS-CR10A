@@ -1,0 +1,21 @@
+Créditos e licenças do pacote dobot_celula
+
+- dobot_celula/ft_serial.py, line_source.py, ft_cmd_channel.py, lc_filter.py,
+  ft_modbus.py e ft_polled.py: copiados do pacote `touch_pack` do projeto
+  cr10twin (https://github.com/Martins-Lucaas/cr10twin, autor: Martins-Lucaas,
+  licença Apache-2.0, cópia em LICENSE.cr10twin). Em todos, a mudança é o nome
+  do módulo de constantes importado (`.constants` -> `.constantes`). Só o
+  ft_serial.py tem uma mudança a mais: a velocidade automática (baud 0 tenta
+  1 Mbaud e 115200, trocando na própria porta aberta) e a contagem de bytes
+  recebidos.
+
+- dobot_celula/constantes.py: valores do FA7155 copiados de
+  src/touch_pack/touch_pack/constants.py do mesmo projeto, com os comentários
+  resumidos.
+
+- dobot_celula/celula_carga_node.py: original deste projeto, no lugar do
+  ft_receiver_node.py do cr10twin (mesma ideia: dono único da porta, filtro
+  por eixo, tara do lado do computador; leitura polled por padrão, como no
+  cr10twin), sem a parte de palpação e sem os comandos de escrita no sensor.
+
+O projeto cr10twin original não foi modificado.

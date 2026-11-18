@@ -228,7 +228,7 @@ QPushButton#parar:disabled {
     border-color: %(borda)s;
 }
 QPushButton#alternar:checked { background-color: %(perigo)s; border-color: %(perigo)s; }
-/* Seletor de opções lado a lado (modo da coleta, forma da onda...) */
+/* Seletor de opções lado a lado */
 QPushButton#segmento {
     background-color: %(cartao)s; color: %(texto)s; border: 1px solid %(borda_forte)s;
     border-radius: 0px; padding: 6px 12px; font-weight: 500;

@@ -9,8 +9,9 @@
 #   * cria ~/.local/bin/iris apontando para o arquivo `iris` deste
 #     repositório (atualizações chegam pelo git pull, sem instalar de novo);
 #   * garante ~/.local/bin no PATH e ROS_LOCALHOST_ONLY=1 nos terminais;
-#   * confere o que o projeto precisa (ROS 2 Humble, pacotes Python, grupo dialout,
-#     nome no git) e diz o comando para o que faltar. Não usa sudo nem instala nada.
+#   * confere o que o projeto precisa (ROS 2 Humble, Gazebo, pacotes Python, grupo dialout,
+#     nome no git)
+#     e diz o comando para o que faltar. Não usa sudo nem instala nada.
 
 PROJETO="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 BIN="$HOME/.local/bin"
@@ -67,8 +68,7 @@ if [ -f /opt/ros/humble/share/gazebo_ros/package.xml ]; then
 else
     falta "Gazebo: sudo apt install ros-humble-gazebo-ros-pkgs ros-humble-gazebo-ros2-control ros-humble-ros2-controllers ros-humble-xacro"
 fi
-for par in PyQt5:python3-pyqt5 numpy:python3-numpy scipy:python3-scipy yaml:python3-yaml \
-           matplotlib:python3-matplotlib serial:python3-serial; do
+for par in PyQt5:python3-pyqt5 numpy:python3-numpy serial:python3-serial; do
     modulo=${par%%:*}; pacote=${par##*:}
     if python3 -c "import $modulo" 2>/dev/null; then
         ok "Python: $modulo"
@@ -77,7 +77,7 @@ for par in PyQt5:python3-pyqt5 numpy:python3-numpy scipy:python3-scipy yaml:pyth
     fi
 done
 if id -nG "$USER" | grep -qw dialout; then
-    ok "grupo dialout (célula de carga e placas táteis pela USB)"
+    ok "grupo dialout (célula de carga pela USB)"
 else
     falta "grupo dialout: sudo usermod -aG dialout $USER  (depois saia da sessão e entre de novo)"
 fi

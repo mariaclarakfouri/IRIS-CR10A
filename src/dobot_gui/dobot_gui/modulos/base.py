@@ -8,7 +8,7 @@ módulo novo:
   3. coloque a classe na lista MODULOS de `modulos/__init__.py`.
 
 O módulo recebe a janela principal (`self.janela`), que oferece a base comum:
-mover o robô com segurança (`mover_e_esperar`), ir para o home conferindo a
+mover o robô (`mover_e_esperar`), ir para o home conferindo a
 posição (`ir_para_home_e_conferir`), esperas que respeitam o botão Parar
 (`esperar`, `parado`), registro (`log`), mensagens (`alerta`) e o painel de
 progresso (`progresso`).

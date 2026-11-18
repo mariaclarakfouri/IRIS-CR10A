@@ -1,0 +1,9 @@
+Créditos e licenças (arquivos desta pasta e módulos robot3d_*.py):
+
+- Malhas STL e URDF do CR10: pacote `cra_description`, extraído do repositório
+  oficial da Dobot (Dobot-Arm/DOBOT_6Axis_ROS2_V4) e versionado no projeto
+  cr10twin. O URDF aqui é o cr10_robot.xacro do cr10twin, só com o caminho das
+  malhas trocado.
+- Módulos robot3d_scene.py e robot3d_render.py: derivados de urdf_scene.py e
+  manip3d.py do projeto cr10twin (https://github.com/Martins-Lucaas/cr10twin,
+  autor: Martins-Lucaas), licença Apache-2.0. Adaptados para PyQt5.

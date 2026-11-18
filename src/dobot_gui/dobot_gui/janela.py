@@ -243,7 +243,7 @@ class JanelaPrincipal(QWidget):
         self.speed_value_label.setMinimumWidth(44)
         self.speed_value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         lay.addWidget(self.speed_value_label)
-        lay.addWidget(rotulo(f'Limite de segurança: {VELOCIDADE_MAXIMA_PERMITIDA}%', 'ladoDica'))
+        lay.addWidget(rotulo(f'Limite de velocidade: {VELOCIDADE_MAXIMA_PERMITIDA}%', 'ladoDica'))
 
         lay.addSpacing(8)
         lay.addWidget(separador_vertical())
@@ -348,13 +348,12 @@ class JanelaPrincipal(QWidget):
         lay.addWidget(self.rodape_velocidade)
         lay.addWidget(separador_vertical())
         escudo = QLabel()
-        escudo.setPixmap(make_icon('shield', COR['sucesso']).pixmap(14, 14))
+        escudo.setPixmap(make_icon('warning', COR['aviso']).pixmap(14, 14))
         lay.addWidget(escudo)
-        seguranca = rotulo('Segurança ativa', 'rodapeTexto')
-        celula = getattr(self.ros_node, 'ferramenta', '') == 'celula_fa7155'
-        seguranca.setToolTip('Verificação de segurança ligada, com '
-                             + ('a célula de carga FA7155 e a ponteira' if celula
-                                else 'o sensor S02') + ' no modelo.')
+        seguranca = rotulo('Segurança ainda não configurada', 'rodapeTexto')
+        seguranca.setToolTip('Os movimentos ainda não passam por verificação de colisão nem por '
+                             'limites das juntas: o protocolo de segurança é a próxima etapa. '
+                             'Teste no gêmeo virtual e com velocidade baixa.')
         lay.addWidget(seguranca)
         lay.addWidget(separador_vertical())
         self.pose_label = rotulo('', 'rodapeMono')
@@ -848,9 +847,9 @@ class JanelaPrincipal(QWidget):
 
     def mover_e_esperar(self, joints, ao_status=None):
         """Chama a action move_joint e bloqueia (na thread de fundo) até o
-        resultado. Todo movimento passa pela verificação de segurança do
-        servidor. `ao_status(texto)` recebe cada aviso de andamento do
-        servidor ("Verificando segurança do caminho...", "Movendo...")."""
+        resultado. Todo movimento passa pelo ponto de verificação do servidor
+        (onde entrará o protocolo de segurança). `ao_status(texto)` recebe cada
+        aviso de andamento do servidor ("Movendo...")."""
         if self.parado():
             return False, 'Movimento parado pelo usuário.'
         done_event = threading.Event()
@@ -870,57 +869,6 @@ class JanelaPrincipal(QWidget):
         self.ros_node.call_move_joint(list(joints), on_feedback, on_done)
         done_event.wait()
         return outcome['ok'], outcome['msg']
-
-    def seguir_trajetoria_e_esperar(self, pontos, periodo_s, ao_avancar=None):
-        """Percurso contínuo (movimento em 8): o robô passa pelos pontos sem
-        parar. Bloqueia (na thread de fundo) até o resultado. O servidor confere
-        velocidade e segurança do percurso inteiro antes de mexer o robô.
-        `ao_avancar(indice)` é chamado a cada aviso de andamento."""
-        if self.parado():
-            return False, 'Movimento parado pelo usuário.'
-        done_event = threading.Event()
-        outcome = {}
-
-        def on_feedback(status, indice):
-            prefixo = self._progresso_prefixo
-            self.progresso.emit({'detalhe': f'{prefixo} · {status}' if prefixo else status})
-            if ao_avancar is not None:
-                ao_avancar(indice)
-
-        def on_done(ok, msg):
-            outcome['ok'] = ok
-            outcome['msg'] = msg
-            done_event.set()
-
-        self.ros_node.call_seguir_trajetoria(pontos, periodo_s, on_feedback, on_done)
-        done_event.wait()
-        return outcome['ok'], outcome['msg']
-
-    def mover_ponta_e_esperar(self, deslocamento_mm, velocidade_mms, parar_no_contato=False,
-                              limiar_n=1.0, tocar_mesa=False, altura_mm=None):
-        """Ponteira em linha reta, mantendo a orientação (medição da mesa).
-        Bloqueia (na thread de fundo) até o resultado. Devolve (ok, msg,
-        resultado), com resultado = dict(contato, percorrido_mm, juntas,
-        ponta_mm, forca_n) ou None. Com `altura_mm`, sobe/desce na vertical
-        até essa altura da ponteira (deslocamento_mm é ignorado)."""
-        if self.parado():
-            return False, 'Movimento parado pelo usuário.', None
-        done_event = threading.Event()
-        outcome = {}
-
-        def on_feedback(status, percorrido, forca):
-            prefixo = self._progresso_prefixo
-            texto = f'{status} {percorrido:.1f} mm · {forca:.2f} N'
-            self.progresso.emit({'detalhe': f'{prefixo} · {texto}' if prefixo else texto})
-
-        def on_done(ok, msg, resultado):
-            outcome.update(ok=ok, msg=msg, resultado=resultado)
-            done_event.set()
-
-        self.ros_node.call_mover_ponta(deslocamento_mm, velocidade_mms, parar_no_contato,
-                                       limiar_n, tocar_mesa, on_feedback, on_done, altura_mm)
-        done_event.wait()
-        return outcome['ok'], outcome['msg'], outcome['resultado']
 
     def ler_juntas_bloqueando(self, timeout=GET_JOINTS_TIMEOUT_SECONDS):
         """Lê a posição real das 6 juntas, bloqueando (na thread de fundo).

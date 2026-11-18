@@ -13,12 +13,9 @@ find_package(builtin_interfaces REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/EstadoJuntas.msg"
   "action/MoveJoint.action"
-  "action/SeguirTrajetoria.action"
-  "action/MoverPonta.action"
   "srv/SetSpeed.srv"
   "srv/GetJoints.srv"
   "srv/JogJoint.srv"
-  "srv/VerificarCaminho.srv"
   DEPENDENCIES builtin_interfaces
 )
 

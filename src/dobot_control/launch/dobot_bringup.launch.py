@@ -4,17 +4,16 @@ Argumentos:
     modo      real | sim  (default real)
                 real -> comanda o robô de verdade
                 sim  -> comanda SÓ o gêmeo virtual no Gazebo; o robô real não
-                        é tocado. Use para testar sequências antes.
+                        é tocado. Use para testar antes.
     gemeo     true | false  (default true)
                 No modo real, abre o gêmeo seguindo o robô em tempo real.
                 No modo sim o gêmeo sempre abre (é ele que se move).
     robot_ip  IP do CR10 (default 192.168.5.2)
     cenario   laboratorio | vazio  (default laboratorio) — cenário do gêmeo
     janela    true | false (default true) — false abre o gêmeo sem a janela 3D
-    sensor    false | true (default false) — gêmeo com o sensor inercial S02 na ponta
-    celula    false | true (default false) — célula de carga FA7155 com a ponteira na
-              ponta: gêmeo com a célula, SEGURANÇA e peso do robô com a geometria
-              dela (vale também no robô real). Não dá para usar junto com sensor:=true.
+    celula    true | false (default true) — célula de carga FA7155 com a ponteira na
+              ponta: o nó celula_carga lê a célula (no gêmeo, a força simulada) e o
+              gêmeo e o Robô 3D mostram a célula. false = nada na ponta.
 
 Exemplos:
     ros2 launch dobot_control dobot_bringup.launch.py
@@ -36,19 +35,14 @@ def _setup(context):
     robot_ip = context.launch_configurations['robot_ip'].strip()
     cenario = context.launch_configurations['cenario'].strip()
     janela = context.launch_configurations['janela'].strip()
-    sensor = context.launch_configurations['sensor'].strip()
     celula = context.launch_configurations['celula'].strip().lower() in ('true', '1', 'sim')
-    if celula and sensor.lower() in ('true', '1', 'sim'):
-        raise RuntimeError('escolha sensor:=true OU celula:=true: só cabe uma ferramenta na ponta')
-    # Perfil de ferramenta do seguranca.yaml ('' = sensor S02, o padrão).
-    ferramenta = 'celula_fa7155' if celula else ''
 
     if modo not in ('real', 'sim'):
         raise RuntimeError(f"modo deve ser 'real' ou 'sim', não {modo!r}")
 
     actions = [
-        # Estado das juntas (ângulo, velocidade, corrente, temperatura, torque)
-        # para a aba Análise de Juntas. Só leitura.
+        # Estado das juntas (ângulo, velocidade...) ~25 vezes por segundo, só
+        # leitura: deixa o Robô 3D liso.
         Node(
             package='dobot_control',
             executable='estado_juntas',
@@ -61,26 +55,32 @@ def _setup(context):
             executable='dobot_action_server',
             name='dobot_action_server',
             output='screen',
-            parameters=[{'robot_ip': robot_ip, 'modo': modo, 'ferramenta': ferramenta}],
+            parameters=[{'robot_ip': robot_ip, 'modo': modo}],
         ),
         Node(
             package='dobot_gui',
             executable='dobot_gui',
             name='dobot_gui_node',
             output='screen',
-            # `ponta`: o que o Robô 3D desenha no flange (a ferramenta com que abriu).
-            parameters=[{'modo': modo, 'robot_ip': robot_ip, 'ferramenta': ferramenta,
-                         'ponta': ('celula' if celula else
-                                   'sensor' if sensor.lower() in ('true', '1', 'sim') else 'nada')}],
+            parameters=[{'modo': modo, 'robot_ip': robot_ip,
+                         'ponta': 'celula' if celula else 'nada'}],
         ),
     ]
+    if celula:
+        # Leitura da célula (real: conversor USB-RS485; sim: sensor simulado).
+        actions.append(Node(
+            package='dobot_celula',
+            executable='celula_carga',
+            name='celula_carga',
+            output='screen',
+            parameters=[{'modo': modo}],
+        ))
     if gemeo or modo == 'sim':
         actions.append(IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(
                 get_package_share_directory('dobot_twin'), 'launch', 'gemeo.launch.py')),
             launch_arguments={'modo': modo, 'robot_ip': robot_ip,
                               'cenario': cenario, 'janela': janela,
-                              'sensor': sensor,
                               'celula': 'true' if celula else 'false'}.items()))
 
     return actions
@@ -93,7 +93,6 @@ def generate_launch_description():
         DeclareLaunchArgument('robot_ip', default_value='192.168.5.2'),
         DeclareLaunchArgument('cenario', default_value='laboratorio'),
         DeclareLaunchArgument('janela', default_value='true'),
-        DeclareLaunchArgument('sensor', default_value='false'),
-        DeclareLaunchArgument('celula', default_value='false'),
+        DeclareLaunchArgument('celula', default_value='true'),
         OpaqueFunction(function=_setup),
     ])

@@ -1,0 +1,4 @@
+Créditos do pacote dobot_gui
+
+- robot3d/ (modelo do CR10A e malhas usados pelo Robô 3D) e o desenho 3D
+  (robot3d_scene.py, robot3d_render.py): ver robot3d/NOTICE.txt.

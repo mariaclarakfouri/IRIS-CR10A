@@ -3,40 +3,29 @@
 #
 #   iris                    robô REAL, com o gêmeo seguindo em tempo real
 #   iris gemeo              SIMULAÇÃO: só o gêmeo virtual se move, o robô real não
-#   iris sem-gemeo          robô REAL, sem abrir o gêmeo (como era antes)
+#   iris sem-gemeo          robô REAL, sem abrir o gêmeo
+#   iris sem-nada           sem a célula de carga na ponta (padrão: com a célula)
 #
-# A ferramenta na ponta é a CÉLULA DE CARGA FA7155 com a ponteira, a não ser que
-# se peça outra (o gêmeo, a segurança e o peso enviado ao robô são os dela):
-#   iris com-sensor         sensor inercial S02 na ponta, em vez da célula
-#   iris sem-nada           nada na ponta
-#   (valem com gemeo também: iris gemeo sem-nada)
+# As opções se combinam: iris gemeo sem-nada
 set -e
 
 # A pasta do projeto é a deste arquivo: funciona em qualquer computador e pasta.
 WORKSPACE_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 
+FERRAMENTA=celula
 ARGS=()
-FERRAMENTA=celula            # padrão: a célula de carga na ponta
 for opcao in "$@"; do
     case "$opcao" in
-        gemeo|sim)   ARGS+=(modo:=sim) ;;    # 'sim' continua valendo (nome antigo)
+        gemeo|sim)   ARGS+=(modo:=sim) ;;
         sem-gemeo)   ARGS+=(gemeo:=false) ;;
-        com-sensor)  FERRAMENTA=sensor ;;
-        sem-nada|sem-celula|sem-sensor) FERRAMENTA=nada ;;
-        com-celula)  FERRAMENTA=celula ;;    # nome antigo: a célula já é o padrão
+        sem-nada)    FERRAMENTA=nada ;;
         *)
             echo "Opção desconhecida: $opcao"
-            echo "Use: iris [gemeo | sem-gemeo] [com-sensor | sem-nada]   (iris ajuda para detalhes)"
+            echo "Use: iris [gemeo | sem-gemeo] [sem-nada]   (iris ajuda para detalhes)"
             exit 1
             ;;
     esac
 done
-case "$FERRAMENTA" in
-    celula) ARGS+=(celula:=true sensor:=false) ;;
-    sensor) ARGS+=(celula:=false sensor:=true) ;;
-    nada)   ARGS+=(celula:=false sensor:=false) ;;
-esac
-echo "Ferramenta na ponta: $FERRAMENTA (iris ajuda mostra as outras opções)"
 
 if [ ! -f /opt/ros/humble/setup.bash ]; then
     echo "O ROS 2 Humble não está instalado neste computador (falta /opt/ros/humble)."
@@ -63,5 +52,7 @@ source install/setup.bash
 # Não afeta o robô: a conexão com o CR10A é TCP (portas 29999 e 30004), não DDS.
 # Fica depois dos "source" para nenhum deles mudar o valor.
 export ROS_LOCALHOST_ONLY=1
+
+if [ "$FERRAMENTA" = celula ]; then ARGS+=(celula:=true); else ARGS+=(celula:=false); fi
 
 ros2 launch dobot_control dobot_bringup.launch.py "${ARGS[@]}"

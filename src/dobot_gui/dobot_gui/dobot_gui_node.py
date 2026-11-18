@@ -60,7 +60,7 @@ def main(args=None):
     # Tudo o que foi criado até aqui (janela, gráficos, modelo 3D, ROS) vive o
     # programa inteiro: tirá-lo da faxina de memória do Python deixa cada
     # faxina curta (medido: ~28 ms -> <1 ms), sem travadinhas na tela quando os
-    # sensores táteis criam e descartam muitos objetos por segundo.
+    # gráficos criam e descartam muitos objetos por segundo.
     gc.collect()
     gc.freeze()
     # Diagnóstico opcional (DOBOT_VIGIA=<arquivo>): anota as travadinhas da janela.

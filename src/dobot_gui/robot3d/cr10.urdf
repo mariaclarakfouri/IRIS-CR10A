@@ -19,12 +19,12 @@
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><mesh filename="file://$(find dobot_twin)/meshes/cr10/base_link.STL"/></geometry>
-      <material name="body_gray"><color rgba="0.800 0.800 0.800 1"/></material>
+      <geometry><mesh filename="meshes/cr10/base_link.STL"/></geometry>
+      <material name="body_gray"><color rgba="0.960 0.965 0.975 1"/></material>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><mesh filename="file://$(find dobot_twin)/meshes/cr10/base_link.STL"/></geometry>
+      <geometry><mesh filename="meshes/cr10/base_link.STL"/></geometry>
     </collision>
   </link>
 
@@ -52,12 +52,12 @@
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
-      <geometry><mesh filename="file://$(find dobot_twin)/meshes/cr10/Link1.STL"/></geometry>
-      <material name="body_gray"><color rgba="0.800 0.800 0.800 1"/></material>
+      <geometry><mesh filename="meshes/cr10/Link1.STL"/></geometry>
+      <material name="body_gray"><color rgba="0.960 0.965 0.975 1"/></material>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><mesh filename="file://$(find dobot_twin)/meshes/cr10/Link1.STL"/></geometry>
+      <geometry><mesh filename="meshes/cr10/Link1.STL"/></geometry>
     </collision>
   </link>
   <joint name="joint1" type="revolute">
@@ -73,8 +73,8 @@
   <link name="ring_j1">
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><cylinder radius="0.0830" length="0.0140"/></geometry>
-      <material name="dobot_blue"><color rgba="0.157 0.290 0.690 1"/></material>
+      <geometry><cylinder radius="0.0830" length="0.0300"/></geometry>
+      <material name="dobot_blue"><color rgba="0.145 0.388 0.922 1"/></material>
     </visual>
   </link>
   <joint name="joint_ring_j1" type="fixed">
@@ -100,8 +100,8 @@
   <link name="ring_j2">
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><cylinder radius="0.0790" length="0.0140"/></geometry>
-      <material name="dobot_blue"><color rgba="0.157 0.290 0.690 1"/></material>
+      <geometry><cylinder radius="0.0790" length="0.0300"/></geometry>
+      <material name="dobot_blue"><color rgba="0.145 0.388 0.922 1"/></material>
     </visual>
   </link>
   <joint name="joint_ring_j2" type="fixed">
@@ -136,13 +136,13 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="file://$(find dobot_twin)/meshes/cr10/Link2.STL"  />
+        <mesh filename="meshes/cr10/Link2.STL"  />
       </geometry>
-      <material name="body_gray"><color rgba="0.800 0.800 0.800 1"/></material>
+      <material name="body_gray"><color rgba="0.960 0.965 0.975 1"/></material>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><mesh filename="file://$(find dobot_twin)/meshes/cr10/Link2.STL"/></geometry>
+      <geometry><mesh filename="meshes/cr10/Link2.STL"/></geometry>
     </collision>
   </link>
   <joint name="joint2" type="revolute">
@@ -159,8 +159,8 @@
   <link name="ring_j3">
     <visual>
       <origin xyz="0 0 0" rpy="0 1.5708 0"/>
-      <geometry><cylinder radius="0.0700" length="0.0140"/></geometry>
-      <material name="dobot_blue"><color rgba="0.157 0.290 0.690 1"/></material>
+      <geometry><cylinder radius="0.0700" length="0.0300"/></geometry>
+      <material name="dobot_blue"><color rgba="0.145 0.388 0.922 1"/></material>
     </visual>
   </link>
   <joint name="joint_ring_j3" type="fixed">
@@ -192,13 +192,13 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="file://$(find dobot_twin)/meshes/cr10/Link3.STL"  />
+        <mesh filename="meshes/cr10/Link3.STL"  />
       </geometry>
-      <material name="body_gray"><color rgba="0.800 0.800 0.800 1"/></material>
+      <material name="body_gray"><color rgba="0.960 0.965 0.975 1"/></material>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><mesh filename="file://$(find dobot_twin)/meshes/cr10/Link3.STL"/></geometry>
+      <geometry><mesh filename="meshes/cr10/Link3.STL"/></geometry>
     </collision>
   </link>
   <joint name="joint3" type="revolute">
@@ -222,13 +222,13 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="file://$(find dobot_twin)/meshes/cr10/Link4.STL"/>
+        <mesh filename="meshes/cr10/Link4.STL"/>
       </geometry>
-      <material name="body_gray"><color rgba="0.800 0.800 0.800 1"/></material>
+      <material name="body_gray"><color rgba="0.960 0.965 0.975 1"/></material>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><mesh filename="file://$(find dobot_twin)/meshes/cr10/Link4.STL"/></geometry>
+      <geometry><mesh filename="meshes/cr10/Link4.STL"/></geometry>
     </collision>
   </link>
   <joint name="joint4" type="revolute">
@@ -243,8 +243,8 @@
   <link name="ring_j4">
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><cylinder radius="0.0530" length="0.0130"/></geometry>
-      <material name="dobot_blue"><color rgba="0.157 0.290 0.690 1"/></material>
+      <geometry><cylinder radius="0.0530" length="0.0300"/></geometry>
+      <material name="dobot_blue"><color rgba="0.145 0.388 0.922 1"/></material>
     </visual>
   </link>
   <joint name="joint_ring_j4" type="fixed">
@@ -277,13 +277,13 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="file://$(find dobot_twin)/meshes/cr10/Link5.STL" />
+        <mesh filename="meshes/cr10/Link5.STL" />
       </geometry>
-      <material name="body_gray"><color rgba="0.800 0.800 0.800 1"/></material>
+      <material name="body_gray"><color rgba="0.960 0.965 0.975 1"/></material>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><mesh filename="file://$(find dobot_twin)/meshes/cr10/Link5.STL"/></geometry>
+      <geometry><mesh filename="meshes/cr10/Link5.STL"/></geometry>
     </collision>
   </link>
   <joint name="joint5" type="revolute">
@@ -298,8 +298,8 @@
   <link name="ring_j5">
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><cylinder radius="0.0530" length="0.0130"/></geometry>
-      <material name="dobot_blue"><color rgba="0.157 0.290 0.690 1"/></material>
+      <geometry><cylinder radius="0.0530" length="0.0300"/></geometry>
+      <material name="dobot_blue"><color rgba="0.145 0.388 0.922 1"/></material>
     </visual>
   </link>
   <joint name="joint_ring_j5" type="fixed">
@@ -332,13 +332,13 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="file://$(find dobot_twin)/meshes/cr10/Link6.STL" />
+        <mesh filename="meshes/cr10/Link6.STL" />
       </geometry>
-      <material name="body_gray"><color rgba="0.800 0.800 0.800 1"/></material>
+      <material name="body_gray"><color rgba="0.960 0.965 0.975 1"/></material>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><mesh filename="file://$(find dobot_twin)/meshes/cr10/Link6.STL"/></geometry>
+      <geometry><mesh filename="meshes/cr10/Link6.STL"/></geometry>
     </collision>
   </link>
   <joint name="joint6" type="revolute">
@@ -353,8 +353,8 @@
   <link name="ring_j6">
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><cylinder radius="0.0600" length="0.0120"/></geometry>
-      <material name="dobot_blue"><color rgba="0.157 0.290 0.690 1"/></material>
+      <geometry><cylinder radius="0.0600" length="0.0300"/></geometry>
+      <material name="dobot_blue"><color rgba="0.145 0.388 0.922 1"/></material>
     </visual>
   </link>
   <joint name="joint_ring_j6" type="fixed">
@@ -521,47 +521,6 @@
     </material></visual>
   </gazebo>
 
-  <!-- ========================================================
-       SENSOR INERCIAL S02 (só nesta versão "com sensor")
-       Invólucro impresso em 3D, medido com paquímetro: 65,36 x 38,13 mm
-       de base e 23,10 mm de altura, 0,3 kg, preso no centro do flange
-       (Link6). A face do flange é z = 0 no frame do Link6 e o lado de fora
-       é +z, então o centro do invólucro fica em z = 11,55 mm. Lado de
-       65,36 mm alinhado com o x do flange (o giro real do invólucro em
-       torno do flange não foi medido).
-       ======================================================== -->
-  <link name="sensor_s02">
-    <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.3"/>
-      <!-- caixa maciça: I = m/12 (a² + b²) -->
-      <inertia ixx="4.969e-05" ixy="0" ixz="0"
-               iyy="1.2014e-04" iyz="0" izz="1.4315e-04"/>
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><box size="0.06536 0.03813 0.0231"/></geometry>
-      <material name="sensor_cinza"><color rgba="0.380 0.380 0.400 1"/></material>
-    </visual>
-    <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><box size="0.06536 0.03813 0.0231"/></geometry>
-    </collision>
-  </link>
-  <joint name="joint_sensor_s02" type="fixed">
-    <origin xyz="0 0 0.01155" rpy="0 0 0"/>
-    <parent link="Link6"/>
-    <child link="sensor_s02"/>
-  </joint>
-  <gazebo reference="sensor_s02">
-    <gravity>false</gravity><selfCollide>true</selfCollide>
-    <visual><material>
-      <ambient>0.300 0.300 0.320 1</ambient>
-      <diffuse>0.380 0.380 0.400 1</diffuse>
-      <specular>0.10 0.10 0.10 1</specular>
-    </material></visual>
-  </gazebo>
-
   <!-- 在运行demo.launch.py时，需要注释这个ros2_control节点 -->
   <ros2_control name="GazeboSystem" type="system">
     <hardware>
@@ -637,7 +596,7 @@
 
   <gazebo>
     <plugin filename="libgazebo_ros2_control.so" name="gazebo_ros2_control">
-      <parameters>$(find dobot_twin)/config/ros2_controllers.yaml</parameters>
+      <parameters>$(find cra_description)/config/ros2_controllers.yaml</parameters>
       <robot_param_node>robot_state_publisher</robot_param_node>
     </plugin>
   </gazebo>

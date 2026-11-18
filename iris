@@ -1,11 +1,10 @@
 #!/bin/bash
 # Atalho para o projeto IRIS CR10A (interface do Dobot + gêmeo virtual).
 #
-#   iris                      robô REAL + gêmeo, com a CÉLULA DE CARGA na ponta
-#   iris gemeo                SIMULAÇÃO (só o gêmeo se move), com a célula na ponta
+#   iris                      robô REAL + gêmeo seguindo em tempo real
+#   iris gemeo                SIMULAÇÃO (só o gêmeo se move)
 #   iris sem-gemeo            robô REAL, sem abrir o gêmeo
-#   iris sem-nada             sem ferramenta na ponta (com gemeo também vale)
-#   iris com-sensor           sensor inercial S02 na ponta, em vez da célula
+#   iris sem-nada             sem a célula de carga na ponta (combina: iris gemeo sem-nada)
 #   iris code                 abre o código no VS Code
 #   iris mudancas             mostra o que mudou desde a última versão salva
 #   iris salvar "descrição"   salva as mudanças e envia para o GitHub (IRIS-CR10A)
@@ -21,7 +20,7 @@ PROJETO="${IRIS_DIR:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")}"
 
 case "${1:-}" in
     ajuda|-h|--help)
-        sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
     code)

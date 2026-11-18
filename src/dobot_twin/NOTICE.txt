@@ -7,11 +7,6 @@ Créditos e licenças do pacote dobot_twin
   Dobot (Dobot-Arm/DOBOT_6Axis_ROS2_V4). A única mudança é o caminho das
   malhas e do yaml: `$(find cra_description)` -> `$(find dobot_twin)`.
 
-- urdf/cr10_robot_com_sensor.xacro: cópia de urdf/cr10_robot.xacro com um
-  acréscimo original deste projeto — o invólucro do sensor inercial S02
-  (65,36 x 38,13 x 23,10 mm, 0,3 kg) fixo no centro do flange. O cr10_robot.xacro
-  continua igual à cópia do cr10twin.
-
 - urdf/cr10_robot_com_celula.xacro: cópia de urdf/cr10_robot.xacro com a
   ferramenta da célula de carga FA7155 (flange fixo, célula, acoplador hot-swap
   e ponteira F, com massas, colisões e o plugin do sensor de força simulado)

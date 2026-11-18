@@ -8,15 +8,10 @@ Argumentos:
                         do robô real (o espelho não sobe)
     robot_ip  IP do CR10 para o espelho (default 192.168.5.2)
     janela    true | false (default true) — false sobe o Gazebo sem a janela 3D
-    sensor    false | true (default false)
-                false -> robô sem nada na ponta (cr10_robot.xacro)
-                true  -> robô com o sensor inercial S02 no flange
-                         (cr10_robot_com_sensor.xacro)
     celula    false | true (default false)
                 true  -> robô com a célula de carga FA7155 e a ponteira no
                          flange (cr10_robot_com_celula.xacro), com o sensor de
                          força simulado publicando em /sim/celula/wrench.
-                         Não dá para usar junto com sensor:=true.
     cenario   laboratorio | vazio  (default laboratorio)
                 laboratorio -> o laboratório do cr10twin (research_lab.world):
                                piso, paredes, armários e a mesa onde o robô
@@ -50,10 +45,7 @@ def _setup(context):
     modo = context.launch_configurations['modo'].strip().lower()
     robot_ip = context.launch_configurations['robot_ip'].strip()
     janela = context.launch_configurations['janela'].strip().lower()
-    com_sensor = context.launch_configurations['sensor'].strip().lower() in ('true', '1', 'sim')
     com_celula = context.launch_configurations['celula'].strip().lower() in ('true', '1', 'sim')
-    if com_sensor and com_celula:
-        raise RuntimeError('escolha sensor:=true OU celula:=true: só cabe uma ferramenta na ponta')
     cenario = context.launch_configurations['cenario'].strip().lower()
     if cenario not in CENARIOS:
         raise RuntimeError(
@@ -61,8 +53,7 @@ def _setup(context):
     world_name, (x, y, z) = CENARIOS[cenario]
 
     pkg = get_package_share_directory('dobot_twin')
-    modelo = ('cr10_robot_com_celula.xacro' if com_celula
-              else 'cr10_robot_com_sensor.xacro' if com_sensor else 'cr10_robot.xacro')
+    modelo = 'cr10_robot_com_celula.xacro' if com_celula else 'cr10_robot.xacro'
     full_urdf = xacro.process_file(os.path.join(pkg, 'urdf', modelo)).toxml()
 
     # O gazebo_ros2_control lê o robot_description do robot_state_publisher e
@@ -129,7 +120,6 @@ def generate_launch_description():
         DeclareLaunchArgument('robot_ip', default_value='192.168.5.2'),
         DeclareLaunchArgument('janela', default_value='true'),
         DeclareLaunchArgument('cenario', default_value='laboratorio'),
-        DeclareLaunchArgument('sensor', default_value='false'),
         DeclareLaunchArgument('celula', default_value='false'),
         OpaqueFunction(function=_setup),
     ])
