@@ -1,0 +1,11 @@
+# Gerado pelo colcon build — refeito a cada execução do IRIS
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+
+# Configurações locais do editor
+.vscode/

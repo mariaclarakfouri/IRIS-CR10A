@@ -1,0 +1,13 @@
+# Goal: percurso contínuo das 6 juntas, em graus. `pontos` tem 6 valores por
+# ponto (J1..J6 do 1º ponto, depois do 2º...). O 1º ponto tem de ser a posição
+# atual do robô. O robô passa pelos pontos sem parar, um a cada `periodo_s`.
+float64[] pontos
+float64 periodo_s
+---
+# Result
+bool success
+string message
+---
+# Feedback
+string status
+int32 indice

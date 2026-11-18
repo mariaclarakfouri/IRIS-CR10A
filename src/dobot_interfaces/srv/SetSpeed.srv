@@ -1,0 +1,5 @@
+# percent: velocidade desejada, de 0 a 50 (limite de segurança = 50% da velocidade máxima do robô)
+int64 percent
+---
+bool success
+string message

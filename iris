@@ -1,0 +1,84 @@
+#!/bin/bash
+# Atalho para o projeto IRIS CR10A (interface do Dobot + gêmeo virtual).
+#
+#   iris                      robô REAL + gêmeo, com a CÉLULA DE CARGA na ponta
+#   iris gemeo                SIMULAÇÃO (só o gêmeo se move), com a célula na ponta
+#   iris sem-gemeo            robô REAL, sem abrir o gêmeo
+#   iris sem-nada             sem ferramenta na ponta (com gemeo também vale)
+#   iris com-sensor           sensor inercial S02 na ponta, em vez da célula
+#   iris code                 abre o código no VS Code
+#   iris mudancas             mostra o que mudou desde a última versão salva
+#   iris salvar "descrição"   salva as mudanças e envia para o GitHub (IRIS-CR10A)
+#   iris ajuda                mostra esta ajuda
+#
+# Para fechar a interface: Ctrl+C neste terminal.
+#
+# Este arquivo mora no repositório; o instalar.sh cria o comando `iris`
+# apontando para ele, então funciona em qualquer computador e em qualquer pasta.
+
+# A pasta do projeto é a deste arquivo (seguindo o atalho criado pelo instalar.sh).
+PROJETO="${IRIS_DIR:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")}"
+
+case "${1:-}" in
+    ajuda|-h|--help)
+        sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+        exit 0
+        ;;
+    code)
+        # Usa o workspace do VS Code da Área de Trabalho, se existir; senão, a pasta.
+        for ws in "$HOME/Área de Trabalho/iris.code-workspace" \
+                  "$HOME/Desktop/iris.code-workspace"; do
+            [ -f "$ws" ] && exec code "$ws"
+        done
+        exec code "$PROJETO"
+        ;;
+    mudancas|mudanças)
+        cd "$PROJETO" || exit 1
+        if [ -z "$(git status --porcelain)" ]; then
+            echo "Nada mudou desde a última versão salva."
+        else
+            echo "Arquivos alterados desde a última versão salva:"
+            git status --short
+        fi
+        exit 0
+        ;;
+    salvar)
+        shift
+        DESCRICAO="$*"
+        if [ -z "$DESCRICAO" ]; then
+            echo "Falta a descrição do que mudou. Exemplo:"
+            echo '  iris salvar "adicionei o giro por tempo"'
+            exit 1
+        fi
+        cd "$PROJETO" || exit 1
+        if [ -z "$(git status --porcelain)" ]; then
+            echo "Nada mudou desde a última versão salva — não há o que enviar."
+            exit 0
+        fi
+        git add -A
+        # Bloqueia o envio se a descrição ou as mudanças tiverem um termo proibido
+        PROIBIDO="$(printf %s 'Y2xhdWRlfGFudGhyb3BpY3xjby1hdXRob3JlZC1ieQ==' | base64 -d)"   # lista codificada
+        if printf '%s' "$DESCRICAO" | grep -qiE "$PROIBIDO" \
+           || git diff --cached -U0 -- . ':!*.STL' | grep -E '^\+' | grep -qiE "$PROIBIDO" \
+           || git diff --cached --name-only | grep -qiE "$PROIBIDO"; then
+            echo "ENVIO CANCELADO: a descrição ou alguma mudança menciona um termo proibido."
+            echo "Trechos encontrados:"
+            git diff --cached -U0 -- . ':!*.STL' | grep -E '^\+' | grep -iE "$PROIBIDO" | head -5
+            git reset -q
+            exit 1
+        fi
+        echo "Arquivos nesta versão:"
+        git diff --cached --name-status
+        git commit -q -m "$DESCRICAO" || exit 1
+        if git push -q origin HEAD 2>&1; then
+            echo "Versão salva e enviada para o GitHub: $(git log -1 --format='%h  %s')"
+        else
+            echo "A versão foi salva NESTE computador, mas o envio para o GitHub falhou."
+            echo "Confira a internet e rode de novo:  cd $PROJETO && git push"
+            exit 1
+        fi
+        exit 0
+        ;;
+esac
+
+exec "$PROJETO/abrir_interface.sh" "$@"

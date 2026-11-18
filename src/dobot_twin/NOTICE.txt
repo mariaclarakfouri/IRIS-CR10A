@@ -1,0 +1,30 @@
+Créditos e licenças do pacote dobot_twin
+
+- urdf/cr10_robot.xacro, meshes/cr10/*.STL e config/ros2_controllers.yaml:
+  copiados SEM ALTERAÇÃO do pacote `cra_description` do projeto cr10twin
+  (https://github.com/Martins-Lucaas/cr10twin, autor: Martins-Lucaas,
+  licença Apache-2.0), que por sua vez os extraiu do repositório oficial da
+  Dobot (Dobot-Arm/DOBOT_6Axis_ROS2_V4). A única mudança é o caminho das
+  malhas e do yaml: `$(find cra_description)` -> `$(find dobot_twin)`.
+
+- urdf/cr10_robot_com_sensor.xacro: cópia de urdf/cr10_robot.xacro com um
+  acréscimo original deste projeto — o invólucro do sensor inercial S02
+  (65,36 x 38,13 x 23,10 mm, 0,3 kg) fixo no centro do flange. O cr10_robot.xacro
+  continua igual à cópia do cr10twin.
+
+- urdf/cr10_robot_com_celula.xacro: cópia de urdf/cr10_robot.xacro com a
+  ferramenta da célula de carga FA7155 (flange fixo, célula, acoplador hot-swap
+  e ponteira F, com massas, colisões e o plugin do sensor de força simulado)
+  copiada de src/touch_pack/urdf/touch_tool_tcp.urdf do mesmo projeto cr10twin.
+  Mudanças: caminho das malhas e o tópico do sensor simulado (/sim/celula/wrench).
+  As malhas em meshes/celula/*.stl são cópias SEM ALTERAÇÃO de
+  src/touch_pack/meshes/ do mesmo projeto.
+
+- worlds/laboratorio.world: cópia SEM ALTERAÇÃO de
+  src/touch_pack/worlds/research_lab.world do mesmo projeto cr10twin.
+
+- A regra de conversão de ângulos (conversao.py) e o formato do pacote de
+  feedback da porta 30004 (espelho_node.py) seguem o kinematics.py e o
+  real_driver.py do mesmo projeto cr10twin.
+
+O projeto cr10twin original não foi modificado.

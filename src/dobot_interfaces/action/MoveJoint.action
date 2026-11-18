@@ -1,0 +1,9 @@
+# Goal: ângulos alvo das 6 juntas, em graus (J1..J6)
+float64[6] joints
+---
+# Result
+bool success
+string message
+---
+# Feedback
+string status

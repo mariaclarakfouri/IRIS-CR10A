@@ -1,0 +1,12 @@
+Créditos do pacote dobot_gui
+
+- dobot_gui/plane_probe.py: copiado SEM MUDANÇAS de
+  src/touch_pack/touch_pack/plane_probe.py do projeto cr10twin
+  (https://github.com/Martins-Lucaas/cr10twin, autor: Martins-Lucaas, licença
+  Apache-2.0). É a conta do plano da calibração do ângulo de ataque do cr10twin
+  (ajuste ortogonal do plano, inclinação, incerteza, planicidade), usada pela
+  aba Alinhamento da Mesa (modulos/alinhamento_mesa.py), que é deste projeto.
+
+- robot3d/: ver robot3d/NOTICE.txt.
+
+O projeto cr10twin original não foi modificado.

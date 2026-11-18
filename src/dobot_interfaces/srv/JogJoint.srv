@@ -1,0 +1,5 @@
+# Manda o robô ir pras juntas pedidas SEM esperar o movimento terminar (movimento manual em tempo real)
+float64[6] joints
+---
+bool success
+string message
