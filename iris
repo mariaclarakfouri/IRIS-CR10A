@@ -1,8 +1,8 @@
 #!/bin/bash
 # Atalho para o projeto IRIS CR10A (interface do Dobot + gêmeo virtual).
 #
-#   iris                      robô REAL + gêmeo seguindo em tempo real
-#   iris gemeo                SIMULAÇÃO (só o gêmeo se move)
+#   iris                      robô REAL + gêmeo seguindo em tempo real (com a célula)
+#   iris gemeo                SIMULAÇÃO, com a célula (só o gêmeo se move)
 #   iris sem-gemeo            robô REAL, sem abrir o gêmeo
 #   iris sem-nada             sem a célula de carga na ponta (combina: iris gemeo sem-nada)
 #   iris code                 abre o código no VS Code

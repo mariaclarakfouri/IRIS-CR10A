@@ -42,10 +42,10 @@ A base da interface:
 
 | Comando | O que faz |
 |---|---|
-| `iris` | Abre a interface com o **robô real**, com o gêmeo seguindo em tempo real |
-| `iris gemeo` | Abre em **simulação**: só o gêmeo virtual se move |
-| `iris sem-gemeo` | Robô real, sem abrir o gêmeo |
-| `iris sem-nada` | Sem a célula de carga na ponta (combina com os outros: `iris gemeo sem-nada`) |
+| `iris` | Abre a interface com o **robô real** e a **célula de carga** na ponta, com o gêmeo seguindo em tempo real |
+| `iris gemeo` | Abre em **simulação**, com a **célula de carga** na ponta: só o gêmeo virtual se move |
+| `iris sem-gemeo` | Robô real com a célula de carga, sem abrir o gêmeo |
+| `iris sem-nada` | Robô real **sem nada na ponta** (sem a célula). Combina com os outros: `iris gemeo sem-nada` abre a simulação sem a célula |
 | `iris code` | Abre o código no VS Code |
 | `iris mudancas` | Mostra o que mudou desde a última versão salva |
 | `iris salvar "descrição"` | Salva as mudanças e envia para este repositório |
