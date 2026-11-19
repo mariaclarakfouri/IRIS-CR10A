@@ -23,10 +23,16 @@ A base da interface:
 - **Controle Juntas**: movimento de cada junta em tempo real e a **home** (com **Ir para a
   home** e **Alterar home**).
 - **Velocidade** ajustável na barra do robô (até 50%).
+- **Mover manualmente** (modo arrastar): o braço fica solto para ser guiado com a mão, até
+  clicar em Parar. Fica na barra de cima e no cartão da home. Só no robô real.
 - **Parar movimento** e **EMERGÊNCIA**.
-- **Célula de Carga** (FA7155): força e momento ao vivo em gráfico, tara e a home da aba.
+- **Célula de Carga** (FA7155): força e momento ao vivo em gráfico e tara.
 - **Robô 3D**: o CR10A em 3D seguindo o robô em tempo real, com a célula na ponta. O comando
   pelo 3D fica desligado até existir a verificação de segurança.
+- **Ferramentas**: qual ferramenta está na ponta e as medidas de cada uma (comprimento,
+  desvio, raio, massa). A célula de carga FA7155 já vem cadastrada.
+- **Campo de Trabalho**: grava os pontos medidos no laboratório (base e teto), cada um com
+  nome, os 6 ângulos do robô e a ferramenta na ponta, em `~/.config/iris/pontos_campo.csv`.
 - **Registro** de tudo o que foi feito.
 - **Gêmeo virtual** do CR10A no Gazebo: no modo simulação, os comandos movem só o gêmeo, e
   o robô real não é tocado; no modo real, o gêmeo segue o robô.

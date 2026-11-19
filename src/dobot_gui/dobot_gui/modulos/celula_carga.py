@@ -84,7 +84,6 @@ def _motivo_sem_dados(e):
 
 class CelulaCarga(Modulo):
     NOME = 'Célula de Carga'
-    CHAVE_HOME = 'celula_carga'
     ICONE = 'sliders'
     DESCRICAO = ('Força e momento nos 6 eixos da célula de carga FA7155 na ponta do robô, '
                  'com tara e estatísticas.')

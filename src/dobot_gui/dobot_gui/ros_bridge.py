@@ -3,7 +3,7 @@ from rclpy.action import ActionClient
 from geometry_msgs.msg import WrenchStamped
 from rclpy.node import Node
 from std_msgs.msg import Empty, String
-from std_srvs.srv import Trigger
+from std_srvs.srv import SetBool, Trigger
 
 from dobot_interfaces.action import MoveJoint
 from dobot_interfaces.msg import EstadoJuntas
@@ -27,6 +27,7 @@ class RosBridge(Node):
         self.get_joints_client = self.create_client(GetJoints, 'get_joints')
         self.emergency_stop_client = self.create_client(Trigger, 'emergency_stop')
         self.stop_motion_client = self.create_client(Trigger, 'stop_motion')
+        self.arrastar_client = self.create_client(SetBool, 'arrastar')
         self.move_joint_client = ActionClient(self, MoveJoint, 'move_joint')
         # O que está no flange (celula | nada): define o desenho do Robô 3D.
         self.ponta = str(self.declare_parameter('ponta', 'celula').value).strip()
@@ -102,6 +103,13 @@ class RosBridge(Node):
 
     def call_stop_motion(self, callback):
         self._trigger(self.stop_motion_client, 'stop_motion', callback, 2.0)
+
+    def call_arrastar(self, ligar, callback):
+        """Liga ou desliga o modo arrastar (mover o robô com a mão).
+        `callback(ok, mensagem)`."""
+        request = SetBool.Request()
+        request.data = bool(ligar)
+        self._chamar(self.arrastar_client, 'arrastar', request, callback, 2.0, self._ok_msg)
 
     def call_connect(self, callback):
         self._trigger(self.connect_client, 'connect', callback)

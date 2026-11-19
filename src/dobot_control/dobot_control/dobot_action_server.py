@@ -17,7 +17,7 @@ from rclpy.action import ActionServer
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from std_srvs.srv import Trigger
+from std_srvs.srv import SetBool, Trigger
 
 from dobot_interfaces.action import MoveJoint
 from dobot_interfaces.srv import GetJoints, JogJoint, SetSpeed
@@ -62,6 +62,9 @@ class DobotActionServer(Node):
 
         self.dashboard = None
         self.emergency_stop_flag = False
+        # Modo arrastar (StartDrag): o braço é guiado com a mão. Enquanto ligado,
+        # nenhum movimento por comando é aceito.
+        self._arrastando = False
         # "Parar movimento" (sem emergência): cada pedido incrementa este
         # contador. Um movimento guarda o valor de quando começou; se mudou,
         # ele foi parado.
@@ -99,6 +102,11 @@ class DobotActionServer(Node):
         self.stop_motion_service = self.create_service(
             Trigger, 'stop_motion', self.stop_motion_callback,
             callback_group=MutuallyExclusiveCallbackGroup())
+        # Modo arrastar (mover o robô com a mão): grupo próprio, para o
+        # desligar nunca esperar atrás de outra coisa.
+        self.arrastar_service = self.create_service(
+            SetBool, 'arrastar', self.arrastar_callback,
+            callback_group=MutuallyExclusiveCallbackGroup())
 
         self.get_logger().info('dobot_action_server pronto. Aguardando chamada em /connect.')
 
@@ -107,8 +115,77 @@ class DobotActionServer(Node):
 
         Aqui entra o protocolo de segurança do IRIS (limites de cada junta e
         espaço de trabalho medidos no laboratório). Enquanto ele não existe,
-        nada é verificado. Devolve (ok, motivo)."""
+        só o modo arrastar bloqueia. Devolve (ok, motivo)."""
+        if self._arrastando:
+            return False, self._bloqueio_arrastar()
         return True, ''
+
+    # --- modo arrastar (mover o robô com a mão) ---
+
+    def _bloqueio_arrastar(self):
+        """Mensagem de recusa enquanto o modo arrastar está ligado ('' se não)."""
+        if self._arrastando:
+            return ('O robô está no modo arrastar (sendo movido com a mão). Saia dele '
+                    '(Parar) antes de mandar um movimento.')
+        return ''
+
+    def _sair_do_arrastar(self):
+        """StopDrag(). Devolve (ok, mensagem). Marca o modo como desligado mesmo
+        se o comando falhar: na dúvida, nenhum movimento novo fica bloqueado à toa,
+        e o robô fora do modo arrastar segura a posição."""
+        self._arrastando = False
+        self._ultimo_alvo = None
+        try:
+            res = self._send('StopDrag()', lock_timeout=3.0)
+        except (TimeoutError, socket.error, OSError) as e:
+            return False, f'StopDrag() falhou: {e}'
+        self.get_logger().warn(f'[ARRASTAR] StopDrag() -> {res.strip()}')
+        if res.startswith('0,'):
+            return True, 'Modo arrastar desligado: o robô voltou a segurar a posição.'
+        return False, f'StopDrag() recusado pelo robô: {res.strip()}'
+
+    def arrastar_callback(self, request, response):
+        """Liga (data=True) ou desliga o modo arrastar do CR10A (StartDrag /
+        StopDrag, TCP/IP Remote Control Interface Guide): com ele ligado, o braço é
+        guiado com a mão, como pelo botão do próprio robô. Só no robô real, com o
+        robô habilitado e parado."""
+        if self.dashboard is None:
+            response.success, response.message = False, 'Robô não conectado.'
+            return response
+        if not request.data:
+            response.success, response.message = self._sair_do_arrastar()
+            return response
+        if self.modo == 'sim':
+            response.success = False
+            response.message = ('O modo arrastar só existe no robô real: o gêmeo virtual não '
+                                'pode ser guiado com a mão.')
+            return response
+        if self.emergency_stop_flag:
+            response.success = False
+            response.message = 'Robô em PARADA DE EMERGÊNCIA. Limpe o alarme e reconecte.'
+            return response
+        if not self._robo_parado():
+            response.success = False
+            response.message = ('Para entrar no modo arrastar, o robô precisa estar habilitado '
+                                'e parado, sem movimento nem alarme.')
+            return response
+        try:
+            res = self._send('StartDrag()', lock_timeout=3.0)
+        except (TimeoutError, socket.error, OSError) as e:
+            response.success, response.message = False, f'Sem resposta do robô: {e}'
+            return response
+        self.get_logger().warn(f'[ARRASTAR] StartDrag() -> {res.strip()}')
+        if not res.startswith('0,'):
+            erro = self._send('GetErrorID()')
+            response.success = False
+            response.message = (f'O robô recusou o modo arrastar: {res.strip()} | '
+                                f'GetErrorID: {erro.strip()}')
+            return response
+        self._arrastando = True
+        self._ultimo_alvo = None
+        response.success = True
+        response.message = 'Modo arrastar ligado: segure o braço e mova com a mão.'
+        return response
 
     def _robo_parado(self):
         """True só se o robô confirma RobotMode 5 (habilitado, parado). Qualquer
@@ -183,6 +260,7 @@ class DobotActionServer(Node):
                 self.dashboard = self._open_dashboard()
 
             self.emergency_stop_flag = False
+            self._arrastando = False
             self._ultimo_alvo = None
             self._velocidade_pct = None       # a interface manda de novo ao conectar
             self._send('ClearError()')
@@ -211,6 +289,8 @@ class DobotActionServer(Node):
             response.message = 'Já estava desconectado.'
             return response
 
+        if self._arrastando:
+            self._sair_do_arrastar()
         disable_info = self._disable_and_close()
 
         self.get_logger().info('Desconectado do robô.')
@@ -357,6 +437,8 @@ class DobotActionServer(Node):
 
         mensagens = []
         ok = False
+        if self._arrastando:
+            mensagens.append(self._sair_do_arrastar()[1])
         for cmd in ('Stop()', 'Continue()'):
             try:
                 res = self._send(cmd, lock_timeout=3.0)
@@ -367,7 +449,7 @@ class DobotActionServer(Node):
                 mensagens.append(f'{cmd} -> falhou: {e}')
         self.get_logger().warn('[PARAR MOVIMENTO] ' + ' | '.join(mensagens))
         response.success = ok
-        response.message = ('Movimento parado.' if ok else 'Falha ao parar: ') + \
+        response.message = ('Movimento parado. ' if ok else 'Falha ao parar: ') + \
             ' | '.join(mensagens)
         return response
 
@@ -377,6 +459,7 @@ class DobotActionServer(Node):
         na porta do dashboard, então reaproveita a mesma (self.dashboard) —
         mas com um timeout curto pra não ficar refém se algo travar de vez."""
         self.emergency_stop_flag = True
+        self._arrastando = False         # a emergência desabilita o robô
         self._ultimo_alvo = None
 
         if self.dashboard is None:
@@ -615,6 +698,8 @@ class DobotActionServer(Node):
 
     def destroy(self):
         self.emergency_stop_flag = True
+        if self.dashboard and self._arrastando:
+            self._sair_do_arrastar()
         if self.dashboard:
             self._disable_and_close()
         super().destroy_node()

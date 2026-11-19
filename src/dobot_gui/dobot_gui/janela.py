@@ -18,7 +18,6 @@ from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -47,7 +46,8 @@ from .constantes import (
     VELOCIDADE_INICIAL,
     VELOCIDADE_MAXIMA_PERMITIDA,
 )
-from .homes import HOME_PADRAO, LISTA_ABAS, NOME_HOME, CartaoHome, texto_juntas
+from .homes import (DICA_ARRASTAR, DICA_ARRASTAR_SIM, HOME_PADRAO, NOME_HOME, CartaoHome,
+                    texto_juntas)
 from .modulos import MODULO_REGISTRO, MODULOS
 from .tema import COR, app_icon, make_icon
 from .widgets import (
@@ -78,7 +78,7 @@ class JanelaPrincipal(QWidget):
     def __init__(self, ros_node):
         super().__init__()
         self.ros_node = ros_node
-        # Uma home por aba (ver homes.py). A padrão é a do Controle Juntas.
+        # A home do robô (ver homes.py), no cartão do Controle Juntas.
         self.homes = {HOME_PADRAO: list(HOME_JOINTS)}
         self._last_polled = None
         modo = getattr(ros_node, 'modo', 'real')
@@ -248,15 +248,16 @@ class JanelaPrincipal(QWidget):
         lay.addSpacing(8)
         lay.addWidget(separador_vertical())
         lay.addSpacing(8)
-        # Um menu com a home de cada aba.
         self.home_btn = com_icone(QPushButton('Ir para Home'), 'home', COR['texto'])
         self.home_btn.setObjectName('secundario')
         self.home_btn.setEnabled(False)
-        self._menu_homes = QMenu(self.home_btn)
-        self._menu_homes.aboutToShow.connect(self._montar_menu_homes)
-        self.home_btn.setMenu(self._menu_homes)
-        self.home_btn.setMinimumWidth(self.home_btn.sizeHint().width() + 24)   # espaço da setinha
+        self.home_btn.clicked.connect(lambda: self.ir_para_home(HOME_PADRAO))
         lay.addWidget(self.home_btn)
+        self.mao_btn = QPushButton('Mover manualmente')
+        self.mao_btn.setObjectName('secundario')
+        self.mao_btn.setEnabled(False)
+        self.mao_btn.clicked.connect(self.mover_manualmente)
+        lay.addWidget(self.mao_btn)
         lay.addStretch()
         return barra
 
@@ -517,7 +518,7 @@ class JanelaPrincipal(QWidget):
         self.rodape_velocidade.setText(f'Velocidade {self.speed_slider.value()}%')
 
     def _controles_de_movimento(self):
-        ws = [self.speed_slider, self.home_btn]
+        ws = [self.speed_slider, self.home_btn, self.mao_btn]
         for m in self._paginas:
             ws += m.widgets_de_movimento()
         return ws
@@ -527,9 +528,15 @@ class JanelaPrincipal(QWidget):
         dica = ROBOT_STATES[self._robot_state][2]
         for w in self._controles_de_movimento():
             w.setToolTip(dica if not w.isEnabled() else '')
+        for w in [self.mao_btn] + [c.mao_btn for c in self._cartoes_home]:
+            if self.sim_mode:
+                w.setToolTip(DICA_ARRASTAR_SIM)
+            elif w.isEnabled():
+                w.setToolTip(DICA_ARRASTAR)
 
     def _set_joint_controls_enabled(self, enabled):
         self.home_btn.setEnabled(enabled)
+        self.mao_btn.setEnabled(enabled and not self.sim_mode)
         for card in self._cartoes_home:
             card.definir_movimento_habilitado(enabled)
         for m in self._paginas:
@@ -943,18 +950,6 @@ class JanelaPrincipal(QWidget):
         for m in self._paginas:
             m.home_mudou(chave)
 
-    def _montar_menu_homes(self):
-        self._menu_homes.clear()
-        for nome, chave in LISTA_ABAS:
-            home = self.homes.get(chave)
-            acao = self._menu_homes.addAction(nome if home is not None
-                                              else f'{nome} (não gravada)')
-            acao.setEnabled(home is not None)
-            if home is not None:
-                acao.setToolTip(texto_juntas(home))
-                acao.triggered.connect(lambda _c, k=chave: self.ir_para_home(k))
-        self._menu_homes.setToolTipsVisible(True)
-
     def ir_para_home(self, chave):
         home = self.home_de(chave)
         if home is None:
@@ -977,6 +972,57 @@ class JanelaPrincipal(QWidget):
     # ==================================================================
     # Parar movimento e emergência
     # ==================================================================
+
+    # --- Mover manualmente (modo arrastar) ---
+
+    def mover_manualmente(self):
+        """Liga o modo arrastar do robô (o mesmo do botão no braço) até o Parar."""
+        if self._action_running or self.sim_mode:
+            return
+        ferramentas = self.modulo('Ferramentas')
+        f = ferramentas.ativa() if ferramentas is not None else None
+        peso = (f'\n\nFerramenta escolhida no IRIS: {f["nome"]} ({f["massa_kg"]:.3f} kg).'
+                if f else '')
+        texto = ('O robô vai ficar solto para ser guiado com a mão (modo arrastar do '
+                 'controlador, o mesmo do botão no braço).\n\n'
+                 '• Segure o braço antes de confirmar e mova devagar.\n'
+                 '• Para o robô voltar a segurar a posição, clique em Parar (ou EMERGÊNCIA).\n'
+                 '• Enquanto isso, nenhum movimento por comando é aceito.\n'
+                 '• Dá para gravar pontos no Campo de Trabalho: solte o braço, espere '
+                 '"robô parado" e grave.\n\n'
+                 'O peso configurado no controlador do robô (DobotStudio) precisa ser o da '
+                 'ferramenta que está montada, senão o braço pode cair ou subir sozinho.'
+                 + peso)
+        if not self.confirmar('Mover manualmente', texto, 'Ligar o modo arrastar'):
+            return
+        self.iniciar_acao('Mover manualmente', 'Modo arrastar: o robô está sendo movido com a mão.')
+        threading.Thread(target=self._executar_arrastar, daemon=True).start()
+
+    def _executar_arrastar(self):
+        """Liga o modo arrastar, espera o Parar (ou a EMERGÊNCIA) e desliga."""
+        def pedir(ligar):
+            fim, res = threading.Event(), {}
+            self.ros_node.call_arrastar(
+                ligar, lambda ok, msg: (res.update(ok=ok, msg=msg), fim.set()))
+            fim.wait(6.0)
+            return res.get('ok', False), res.get('msg') or 'O robô não respondeu.'
+
+        ok, msg = pedir(True)
+        if not ok:
+            self.terminar_acao(False, msg)
+            return
+        self.progresso.emit({'cronometro': (time.monotonic(), None),
+                             'detalhe': 'Segure o braço e mova com a mão. Para travar o robô, '
+                                        'clique em Parar.'})
+        while not self.parado():
+            self.esperar(0.2)
+        if self._emergencia_acionada:
+            self.terminar_acao(False, 'Modo arrastar interrompido pela EMERGÊNCIA.')
+            return
+        # O Parar do servidor já sai do modo; aqui garante (se já saiu, é inofensivo).
+        ok, msg = pedir(False)
+        self.terminar_acao(ok, 'Modo arrastar desligado: o robô voltou a segurar a posição.'
+                           if ok else msg)
 
     def on_stop_motion_clicked(self):
         self._parar_evento.set()

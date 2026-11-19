@@ -8,7 +8,6 @@ from PyQt5.QtWidgets import QGridLayout
 
 from ..constantes import HOME_JOINTS, JOINT_MAX, JOINT_MIN, JOINT_NAMES
 from ..widgets import Cartao, JointSpinBox, barra_e_campo, rotulo
-from ..homes import CartaoTodasHomes
 from .base import Modulo
 
 
@@ -71,14 +70,8 @@ class ControleJuntas(Modulo):
         return self.joint_sliders + self.joint_spinboxes
 
     def posicionar_cartao_home(self, cartao):
-        # Logo abaixo das juntas, antes do espaço que sobra no fim da página, e
-        # embaixo dela a lista com a home de todas as abas.
+        # Logo abaixo das juntas, antes do espaço que sobra no fim da página.
         self.layout_modulo.insertWidget(self.layout_modulo.count() - 1, cartao)
-        self._todas_homes = CartaoTodasHomes(self.janela)
-        self.layout_modulo.insertWidget(self.layout_modulo.count() - 1, self._todas_homes)
-
-    def cartoes_extras_home(self):
-        return [self._todas_homes]
 
     def carregar_config(self, dados):
         joints = dados.get('joints')

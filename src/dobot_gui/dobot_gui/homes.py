@@ -1,34 +1,33 @@
-"""Uma home por aba.
+"""A home do robô.
 
-Cada aba que tem home guarda a sua posição (graus, convenção do Dobot) em
-`janela.homes[chave]`, salva nas configurações da interface. A do Controle
-Juntas começa na posição de repouso do robô; as outras começam sem home gravada:
-o "Ir para a home" fica travado até você gravar uma.
+A posição (graus, convenção do Dobot) fica em `janela.homes[chave]`, salva nas
+configurações da interface, e começa na posição de repouso do robô.
 
-O cartão `CartaoHome` é o mesmo em todas as abas: as 6 juntas, "Usar posição
-atual" (só preenche os campos), "Gravar home" (pede confirmação e salva) e "Ir
-para a home" (pede confirmação e move). A barra de cima da interface lista todas
-as homes.
+O cartão `CartaoHome` fica no Controle Juntas: as 6 juntas, "Usar posição atual"
+(só preenche os campos), "Gravar home" (pede confirmação e salva), "Ir para a
+home" (pede confirmação e move) e "Mover manualmente". O "Ir para Home" da barra
+de cima vai para esta mesma home.
 """
-from PyQt5.QtWidgets import (QDoubleSpinBox, QGridLayout, QHBoxLayout, QPushButton,
+from PyQt5.QtWidgets import (QDoubleSpinBox, QHBoxLayout, QPushButton,
                              QVBoxLayout, QWidget)
 
 from .constantes import JOINT_MAX, JOINT_MIN, JOINT_NAMES
 from .tema import COR
 from .widgets import Cartao, com_icone, rotulo
 
-# Chave e nome de cada home. A ordem é a do menu da barra de cima e a da lista
-# do Controle Juntas.
+# Chave e nome da home (uma só).
 HOMES = (
-    ('controle_juntas', 'Home do Controle Juntas'),
-    ('celula_carga', 'Home da Célula de Carga'),
+    ('controle_juntas', 'Home'),
 )
 NOME_HOME = dict(HOMES)
 # A home "padrão" da plataforma (janela.home_joints): a do Controle Juntas, que
 # começa na posição de repouso conhecida do robô (constantes.HOME_JOINTS).
 HOME_PADRAO = 'controle_juntas'
-# Uma linha por aba na lista do Controle Juntas e no menu da barra de cima.
-LISTA_ABAS = tuple((nome, chave) for chave, nome in HOMES)
+
+
+DICA_ARRASTAR = ('Liga o modo arrastar do robô (o mesmo do botão no braço): você guia o '
+                 'braço com a mão. Para travar de novo, clique em Parar.')
+DICA_ARRASTAR_SIM = 'Só no robô real: o gêmeo virtual não pode ser guiado com a mão.'
 
 
 def texto_juntas(juntas):
@@ -52,11 +51,15 @@ class CartaoHome(Cartao):
         self.valores = rotulo('', 'valorMono')
         self.ir_btn = com_icone(QPushButton('Ir para a home'), 'home')
         self.ir_btn.clicked.connect(lambda: self.janela.ir_para_home(self.chave))
+        self.mao_btn = QPushButton('Mover manualmente')
+        self.mao_btn.setObjectName('secundario')
+        self.mao_btn.clicked.connect(self.janela.mover_manualmente)
         self.alterar_btn = QPushButton('Alterar home')
         self.alterar_btn.setObjectName('discreto')
         self.alterar_btn.clicked.connect(self._abrir_editor)
         resumo.addWidget(self.valores, 1)
         resumo.addWidget(self.ir_btn)
+        resumo.addWidget(self.mao_btn)
         resumo.addWidget(self.alterar_btn)
         self.corpo.addLayout(resumo)
 
@@ -139,6 +142,7 @@ class CartaoHome(Cartao):
         self.estado.setText(txt)
         self.estado.setStyleSheet(f'color: {cor};')
         self.ir_btn.setEnabled(self._movimento_ok and home is not None)
+        self.mao_btn.setEnabled(self._movimento_ok and not self.janela.sim_mode)
 
     def definir_movimento_habilitado(self, ok):
         self._movimento_ok = bool(ok)
@@ -174,48 +178,3 @@ class CartaoHome(Cartao):
         self.janela.gravar_home(self.chave, novos)
         self._fechar_editor()
 
-
-class CartaoTodasHomes(Cartao):
-    """Todas as homes numa lista, cada uma com o seu "Ir para a home" (aba
-    Controle Juntas). Para mudar uma home, use o cartão da aba dela."""
-
-    chave = None                         # atualiza quando qualquer home é gravada
-
-    def __init__(self, janela):
-        super().__init__('Homes de todas as abas',
-                         'Para mudar uma home, use o cartão no alto da aba dela.')
-        self.janela = janela
-        self._movimento_ok = False
-        grade = QGridLayout()
-        grade.setHorizontalSpacing(18)
-        grade.setVerticalSpacing(8)
-        grade.setColumnStretch(1, 1)
-        self.linhas = {}
-        for i, (nome, chave) in enumerate(LISTA_ABAS):
-            r_nome = rotulo(nome, 'cartaoTexto')
-            r_nome.setStyleSheet('font-weight: 600;')
-            valores = rotulo('', 'valorMono')
-            botao = com_icone(QPushButton('Ir para a home'), 'home')
-            botao.setObjectName('secundario')
-            botao.clicked.connect(lambda _c, k=chave: self.janela.ir_para_home(k))
-            grade.addWidget(r_nome, i, 0)
-            grade.addWidget(valores, i, 1)
-            grade.addWidget(botao, i, 2)
-            self.linhas[nome] = (chave, valores, botao)
-        self.corpo.addLayout(grade)
-        self.recarregar()
-
-    def recarregar(self):
-        for chave, valores, botao in self.linhas.values():
-            home = self.janela.home_de(chave)
-            if home is None:
-                valores.setText('não gravada')
-                valores.setStyleSheet(f'color: {COR["texto_fraco"]};')
-            else:
-                valores.setText(texto_juntas(home))
-                valores.setStyleSheet('')
-            botao.setEnabled(self._movimento_ok and home is not None)
-
-    def definir_movimento_habilitado(self, ok):
-        self._movimento_ok = bool(ok)
-        self.recarregar()
