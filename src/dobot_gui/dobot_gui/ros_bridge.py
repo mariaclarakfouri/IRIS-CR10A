@@ -30,7 +30,7 @@ class RosBridge(Node):
         self.arrastar_client = self.create_client(SetBool, 'arrastar')
         self.move_joint_client = ActionClient(self, MoveJoint, 'move_joint')
         # O que está no flange (celula | nada): define o desenho do Robô 3D.
-        self.ponta = str(self.declare_parameter('ponta', 'celula').value).strip()
+        self.ponta = str(self.declare_parameter('ponta', 'nada').value).strip()
         # Estado das juntas (~25 por segundo, nó estado_juntas): o Robô 3D usa
         # para o movimento liso.
         self._assinantes_estado = []

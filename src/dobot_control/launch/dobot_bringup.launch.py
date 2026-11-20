@@ -11,7 +11,7 @@ Argumentos:
     robot_ip  IP do CR10 (default 192.168.5.2)
     cenario   laboratorio | vazio  (default laboratorio) — cenário do gêmeo
     janela    true | false (default true) — false abre o gêmeo sem a janela 3D
-    celula    true | false (default true) — célula de carga FA7155 com a ponteira na
+    celula    true | false (default false) — célula de carga FA7155 com a ponteira na
               ponta: o nó celula_carga lê a célula (no gêmeo, a força simulada) e o
               gêmeo e o Robô 3D mostram a célula. false = nada na ponta.
 
@@ -93,6 +93,6 @@ def generate_launch_description():
         DeclareLaunchArgument('robot_ip', default_value='192.168.5.2'),
         DeclareLaunchArgument('cenario', default_value='laboratorio'),
         DeclareLaunchArgument('janela', default_value='true'),
-        DeclareLaunchArgument('celula', default_value='true'),
+        DeclareLaunchArgument('celula', default_value='false'),
         OpaqueFunction(function=_setup),
     ])

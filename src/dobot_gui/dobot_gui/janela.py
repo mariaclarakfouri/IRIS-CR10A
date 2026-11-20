@@ -14,6 +14,7 @@ import time
 
 from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QFrame,
     QHBoxLayout,
@@ -22,7 +23,6 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSlider,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -58,6 +58,8 @@ from .widgets import (
     com_icone,
     rotulo,
     separador_vertical,
+    TravaMouse,
+    BarraSegura,
 )
 
 
@@ -78,6 +80,10 @@ class JanelaPrincipal(QWidget):
     def __init__(self, ros_node):
         super().__init__()
         self.ros_node = ros_node
+        # Rodinha do mouse e cliques soltos não mudam juntas nem velocidade
+        # (widgets.TravaMouse). Vale para a interface inteira.
+        self._trava_mouse = TravaMouse(self)
+        QApplication.instance().installEventFilter(self._trava_mouse)
         # A home do robô (ver homes.py), no cartão do Controle Juntas.
         self.homes = {HOME_PADRAO: list(HOME_JOINTS)}
         self._last_polled = None
@@ -232,7 +238,7 @@ class JanelaPrincipal(QWidget):
         lay.addSpacing(8)
 
         lay.addWidget(rotulo('Velocidade', 'ladoRotulo'))
-        self.speed_slider = QSlider(Qt.Horizontal)
+        self.speed_slider = BarraSegura(Qt.Horizontal)
         self.speed_slider.setRange(0, VELOCIDADE_MAXIMA_PERMITIDA)
         self.speed_slider.setValue(VELOCIDADE_INICIAL)
         self.speed_slider.setFixedWidth(160)

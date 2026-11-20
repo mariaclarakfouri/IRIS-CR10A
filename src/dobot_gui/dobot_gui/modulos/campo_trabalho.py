@@ -15,18 +15,34 @@ isso cada ponto guarda com que ferramenta foi medido (o que encostou na mesa).
 
 Os pontos ficam em PONTOS_PATH (CSV, abre em planilha) e são regravados a cada
 mudança. Só grava com o robô parado: um ponto lido no meio do movimento sai
-errado. Este módulo não move o robô.
+errado.
+
+Os pontos são os mesmos em todos os computadores: a cada mudança (e ao abrir a
+interface) eles vão e vêm pelo GitHub, num ramo só deles (sincronia.py). Sem
+internet, ficam salvos aqui e vão na próxima vez.
+
+Robô 3D da aba: mostra o robô (ou o gêmeo) em tempo real e, ao clicar num ponto
+da tabela, o ponto como um robô azul translúcido. Clicar no ponto NÃO move nada.
+"Levar até o ponto" move o robô (no modo gêmeo, o gêmeo do Gazebo), com
+confirmação, pelo mesmo caminho de todo movimento (verificação do servidor,
+Parar e EMERGÊNCIA valendo). No robô real, só com velocidade até
+VELOCIDADE_MAX_PONTO.
 """
 import collections
 import csv
 import datetime
+import math
 import os
 import shutil
+import threading
 import time
+import uuid
 
+import numpy as np
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QFileDialog,
     QHBoxLayout,
     QLineEdit,
@@ -35,6 +51,8 @@ from PyQt5.QtWidgets import (
 )
 
 from ..constantes import JOINT_NAMES, SETTINGS_PATH
+from ..robot_view import RobotView
+from ..sincronia import Sincronia, id_do_ponto
 from ..tema import COR
 from ..widgets import Cartao, com_icone, rotulo
 from .base import Modulo
@@ -57,9 +75,22 @@ SINAL_PONTEIRA_PADRAO = -1.0  # o mesmo da aba Célula de Carga
 COLUNAS_CSV = (['numero', 'nome', 'tipo', 'ferramenta', 'ferramenta_comprimento_mm',
                 'data_hora', 'fonte']
                + [f'{n}_graus' for n in JOINT_NAMES]
-               + ['forca_ponteira_N', 'Fx_N', 'Fy_N', 'Fz_N'])
+               + ['forca_ponteira_N', 'Fx_N', 'Fy_N', 'Fz_N', 'id', 'modificado_em'])
 COLUNAS_TELA = ['Nº', 'Nome', 'Tipo'] + JOINT_NAMES + ['Ferramenta', 'Ponteira (N)', 'Hora']
 COL_NOME = 1
+
+# Velocidade máxima (%) para levar o robô REAL até um ponto: os pontos da base
+# ficam no nível do tampo, então chega devagar.
+VELOCIDADE_MAX_PONTO = 20
+FLUXO_MUDO_S = 1.0           # sem o tópico de estado, o 3D segue a leitura da janela
+# Depois de uma mudança, espera isto antes de enviar (várias mudanças seguidas vão juntas).
+ESPERA_ENVIO_MS = 1500
+# Sem mudança, busca os pontos do outro computador de tempos em tempos.
+BUSCAR_A_CADA_MS = 120000
+
+
+def _agora():
+    return datetime.datetime.now().isoformat(timespec='seconds')
 
 
 def _num(texto):
@@ -77,8 +108,19 @@ class CampoTrabalho(Modulo):
                  'você não digita nada além do nome.')
 
     amostra_recebida = pyqtSignal(object)
+    sincronizado = pyqtSignal(bool, str, bool)   # ok, texto, mudou aqui (vem de outra thread)
+    estado_recebido = pyqtSignal(object)   # ângulos do tópico de estado (thread do ROS)
+    movimento_terminou = pyqtSignal()
 
     def construir(self):
+        self._mov_habilitado = False
+        self._movendo = False
+        self._ultimo_fluxo = 0.0
+        self.estado_recebido.connect(self._ao_receber_estado)
+        self.movimento_terminou.connect(self._ao_terminar_movimento)
+        assinar_estado = getattr(self.janela.ros_node, 'assinar_estado', None)
+        if callable(assinar_estado):
+            assinar_estado(lambda msg: self.estado_recebido.emit(list(msg.angulo_graus)))
         self.pontos = []
         self._juntas = None
         self._parado = False
@@ -90,8 +132,25 @@ class CampoTrabalho(Modulo):
             assinar(self.amostra_recebida.emit, lambda _texto: None)
 
         self.layout_modulo.addWidget(self._cartao_gravar())
-        self.layout_modulo.addWidget(self._cartao_pontos(), 1)
+        linha = QHBoxLayout()
+        linha.setSpacing(16)
+        linha.addWidget(self._cartao_pontos(), 3)
+        linha.addWidget(self._cartao_3d(), 2)
+        self.layout_modulo.addLayout(linha, 1)
+        self.sinc = Sincronia(PONTOS_PATH)
+        self._sinc_rodando = False
+        self._sinc_de_novo = False
+        self.sincronizado.connect(self._ao_sincronizar)
         self._carregar_pontos()
+        self._timer_envio = QTimer(self)
+        self._timer_envio.setSingleShot(True)
+        self._timer_envio.setInterval(ESPERA_ENVIO_MS)
+        self._timer_envio.timeout.connect(self._sincronizar)
+        self._timer_buscar = QTimer(self)
+        self._timer_buscar.setInterval(BUSCAR_A_CADA_MS)
+        self._timer_buscar.timeout.connect(self._sincronizar)
+        self._timer_buscar.start()
+        QTimer.singleShot(500, self._sincronizar)       # ao abrir: busca os do outro computador
 
         self._timer = QTimer(self)
         self._timer.setInterval(200)
@@ -140,9 +199,50 @@ class CampoTrabalho(Modulo):
         c.corpo.addWidget(self.contagem_txt)
         return c
 
+    def _cartao_3d(self):
+        c = Cartao('Robô 3D', 'Clique num ponto da tabela: ele aparece em azul. Só mostra; '
+                              'o robô só se move em "Levar até o ponto".')
+        ponta = getattr(self.janela.ros_node, 'ponta', 'celula')
+        self.robot_view = RobotView(ferramenta='celula' if ponta == 'celula' else None)
+        self.robot_view.setMinimumHeight(420)
+        # Vista mais aberta que a do Robô 3D: o campo vai até ~1 m em volta e 1,4 m de altura.
+        self.robot_view.camera.dist = 3.9
+        self.robot_view.camera.el = math.radians(24.0)
+        self.robot_view.camera.target = np.array([0.0, 0.0, 0.62])
+        c.corpo.addWidget(self.robot_view, 1)
+        self.mostrar_campo = QCheckBox('Mostrar o campo de trabalho calculado')
+        self.mostrar_campo.setChecked(True)
+        self.mostrar_campo.toggled.connect(lambda _v: self._atualizar_campo_3d())
+        c.corpo.addWidget(self.mostrar_campo)
+        self.campo_txt = rotulo('', 'cartaoTexto')
+        self.campo_txt.setWordWrap(True)
+        self.campo_txt.setStyleSheet(f'color: {COR["texto_fraco"]};')
+        c.corpo.addWidget(self.campo_txt)
+        self.ponto_txt = rotulo('Nenhum ponto selecionado.', 'cartaoTexto')
+        self.ponto_txt.setWordWrap(True)
+        c.corpo.addWidget(self.ponto_txt)
+        linha = QHBoxLayout()
+        linha.setSpacing(10)
+        robo = 'o gêmeo' if self.janela.sim_mode else 'o robô'
+        self.ir_btn = com_icone(QPushButton(f'Levar {robo} até o ponto'), 'play')
+        self.ir_btn.clicked.connect(self._confirmar_e_ir)
+        linha.addWidget(self.ir_btn)
+        linha.addStretch(1)
+        c.corpo.addLayout(linha)
+        self.ir_dica = rotulo('', 'cartaoTexto')
+        self.ir_dica.setWordWrap(True)
+        self.ir_dica.setStyleSheet(f'color: {COR["texto_fraco"]};')
+        c.corpo.addWidget(self.ir_dica)
+        return c
+
     def _cartao_pontos(self):
-        c = Cartao('Pontos gravados', f'Salvos em {PONTOS_PATH} (abre em planilha). Para mudar '
-                                      'o nome de um ponto, clique duas vezes no nome.')
+        c = Cartao('Pontos gravados', f'Salvos em {PONTOS_PATH} (abre em planilha) e iguais em '
+                                      'todos os computadores, pelo GitHub. Para mudar o nome de '
+                                      'um ponto, clique duas vezes no nome.')
+        self.sinc_txt = rotulo('Sincronizando com o GitHub…', 'cartaoTexto')
+        self.sinc_txt.setWordWrap(True)
+        self.sinc_txt.setStyleSheet(f'color: {COR["texto_fraco"]};')
+        c.corpo.addWidget(self.sinc_txt)
         self.tab = _tabela(COLUNAS_TELA, 0)
         self.tab.setSelectionMode(QAbstractItemView.SingleSelection)
         self.tab.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -150,7 +250,7 @@ class CampoTrabalho(Modulo):
         self.tab.setFocusPolicy(Qt.StrongFocus)
         self.tab.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.tab.setMinimumHeight(260)
-        self.tab.itemSelectionChanged.connect(self._atualizar_botoes)
+        self.tab.itemSelectionChanged.connect(self._ponto_selecionado)
         self.tab.itemChanged.connect(self._nome_editado)
         c.corpo.addWidget(self.tab, 1)
 
@@ -181,6 +281,118 @@ class CampoTrabalho(Modulo):
     def ao_ler_juntas(self, juntas, robo_parado):
         self._juntas = list(juntas)
         self._parado = bool(robo_parado)
+        if time.monotonic() - self._ultimo_fluxo > FLUXO_MUDO_S:
+            self.robot_view.set_joints_deg(juntas)
+        self._atualizar_botoes()
+
+    def _ao_receber_estado(self, q):
+        if len(q) == 6:
+            self._ultimo_fluxo = time.monotonic()
+            self.robot_view.seguir(q)
+
+    # ------------------------------------------------------------------
+    # Ponto no 3D e levar o robô até ele
+    # ------------------------------------------------------------------
+
+    def _selecionado(self):
+        linhas = {i.row() for i in self.tab.selectedItems()}
+        if not linhas or min(linhas) >= len(self.pontos):
+            return None
+        return self.pontos[min(linhas)]
+
+    def _atualizar_campo_3d(self):
+        if not hasattr(self, 'robot_view'):
+            return
+        base = [p['juntas'] for p in self.pontos if p['tipo'] == 'base']
+        teto = [p['juntas'] for p in self.pontos if p['tipo'] == 'teto']
+        campo = self.robot_view.definir_campo(base, teto) if self.mostrar_campo.isChecked() \
+            else self.robot_view.definir_campo([], [])
+        if campo is None:
+            self.campo_txt.setText('' if not self.mostrar_campo.isChecked() else
+                                   'Para calcular o campo: pelo menos 3 pontos da base e 1 do teto.')
+            return
+        self.campo_txt.setText(
+            f'Chão a {campo.chao_z:.1f} mm (pontos da base variam {campo.chao_variacao:.1f} mm) · '
+            f'teto a {campo.teto_z:.1f} mm (o ponto do teto mais baixo) · em volta: do contorno '
+            'amarelo (base) ao rosa (teto) em linha reta, sem passar de nenhum dos dois · o '
+            'alcance do braço só corta onde for menor. Alturas no referencial do robô, na '
+            'posição do flange (sem ferramenta).')
+
+    def _ponto_selecionado(self):
+        p = self._selecionado()
+        if p is None:
+            self.robot_view.definir_alvo(None)
+            self.ponto_txt.setText('Nenhum ponto selecionado.')
+        else:
+            self.robot_view.definir_alvo(p['juntas'])
+            self.robot_view.definir_estado_alvo('ponto')
+            self.ponto_txt.setText(f'{p["nome"]} ({NOME_TIPO[p["tipo"]]}): '
+                                   + '  '.join(f'{n} {v:.1f}°'
+                                               for n, v in zip(JOINT_NAMES, p['juntas'])))
+        self._atualizar_botoes()
+
+    def _motivo_bloqueio_ir(self):
+        robo = 'gêmeo' if self.janela.sim_mode else 'robô'
+        if self._selecionado() is None:
+            return 'Clique num ponto da tabela.'
+        if self._movendo:
+            return f'O {robo} está indo até o ponto.'
+        if not self._mov_habilitado:
+            return f'Com o {robo} conectado e parado, dá para levá-lo até o ponto.'
+        vel = self.janela.speed_slider.value()
+        if not self.janela.sim_mode and vel > VELOCIDADE_MAX_PONTO:
+            return (f'No robô real, só com velocidade até {VELOCIDADE_MAX_PONTO}% '
+                    f'(agora: {vel}%).')
+        return ''
+
+    def definir_movimento_habilitado(self, habilitado):
+        self._mov_habilitado = bool(habilitado)
+        self._atualizar_botoes()
+
+    def _confirmar_e_ir(self):
+        j = self.janela
+        p = self._selecionado()
+        if p is None or self._motivo_bloqueio_ir() or j._action_running:
+            self._atualizar_botoes()
+            return
+        robo = 'gêmeo' if j.sim_mode else 'robô'
+        alvo = [float(v) for v in p['juntas']]
+        de = j.ultimas_juntas() or alvo
+        maior = max(abs(a - b) for a, b in zip(alvo, de))
+        avisos = []
+        if maior > 90:
+            avisos.append(f'Movimento grande ({maior:.0f}° numa junta): confira se não há '
+                          'ninguém nem nada perto do robô.')
+        if not j.sim_mode and p['tipo'] == 'base':
+            avisos.append('Ponto da BASE: o flange chega no nível do tampo. O caminho até lá '
+                          'não é conferido: acompanhe com a mão perto da EMERGÊNCIA.')
+        texto = (f'Levar o {robo} até "{p["nome"]}" ({NOME_TIPO[p["tipo"]]}).\n\n'
+                 'De:  ' + ', '.join(f'{n} {v:.1f}°' for n, v in zip(JOINT_NAMES, de))
+                 + '\nPara: ' + ', '.join(f'{n} {v:.1f}°' for n, v in zip(JOINT_NAMES, alvo))
+                 + f'\n\nVelocidade: {j.speed_slider.value()}%'
+                 + ''.join('\n\nATENÇÃO: ' + a for a in avisos)
+                 + '\n\nParar e EMERGÊNCIA continuam valendo durante o movimento.')
+        if not j.confirmar('Levar até o ponto', texto, f'Levar o {robo}'):
+            return
+        if j._action_running or self._motivo_bloqueio_ir():
+            return
+        self._movendo = True
+        self._atualizar_botoes()
+        j.iniciar_acao(f'Indo até o ponto "{p["nome"]}"', f'Levar até o ponto "{p["nome"]}": '
+                       + ', '.join(f'{n} {v:.1f}°' for n, v in zip(JOINT_NAMES, alvo)))
+        threading.Thread(target=self._executar_ir, args=(alvo, p['nome']), daemon=True).start()
+
+    def _executar_ir(self, alvo, nome):
+        j = self.janela
+        ok, msg = False, 'Movimento não concluído.'
+        try:
+            ok, msg = j.mover_e_esperar(alvo)
+        finally:
+            j.terminar_acao(ok, f'Chegou no ponto "{nome}".' if ok else msg)
+            self.movimento_terminou.emit()
+
+    def _ao_terminar_movimento(self):
+        self._movendo = False
         self._atualizar_botoes()
 
     def _ao_receber(self, msg):
@@ -265,6 +477,11 @@ class CampoTrabalho(Modulo):
         self.teto_btn.setEnabled(pode)
         self.apagar_btn.setEnabled(bool(self.tab.selectedItems()))
         self.apagar_todos_btn.setEnabled(bool(self.pontos))
+        if hasattr(self, 'ir_btn'):
+            motivo = self._motivo_bloqueio_ir()
+            self.ir_btn.setEnabled(motivo == '')
+            self.ir_dica.setText(motivo)
+            self.ir_dica.setVisible(bool(motivo))
 
     # ------------------------------------------------------------------
     # Gravar, renomear e apagar
@@ -300,6 +517,8 @@ class CampoTrabalho(Modulo):
             'fonte': 'gemeo' if self.janela.sim_mode else 'robo',
             'juntas': [round(float(v), 3) for v in juntas],
             'forca': None if forca is None else list(forca),
+            'id': uuid.uuid4().hex[:12],
+            'modificado_em': _agora(),
         }
         self.pontos.append(ponto)
         if not self._salvar_pontos():
@@ -321,12 +540,13 @@ class CampoTrabalho(Modulo):
         if not novo or novo == ponto['nome']:
             self._redesenhar_tabela()       # nome vazio: volta o anterior
             return
-        antigo = ponto['nome']
+        antigo, antigo_mod = ponto['nome'], ponto.get('modificado_em', '')
         ponto['nome'] = novo
+        ponto['modificado_em'] = _agora()
         if self._salvar_pontos():
             self.janela.log(f'Ponto "{antigo}" renomeado para "{novo}".')
         else:
-            ponto['nome'] = antigo
+            ponto['nome'], ponto['modificado_em'] = antigo, antigo_mod
         self._redesenhar_tabela()
 
     def _apagar_selecionado(self):
@@ -346,8 +566,9 @@ class CampoTrabalho(Modulo):
         if not self.pontos:
             return
         if not self.janela.confirmar('Começar de novo',
-                                     f'Tirar os {len(self.pontos)} pontos da lista?\nO arquivo '
-                                     'atual fica guardado ao lado, com a data no nome.',
+                                     f'Tirar os {len(self.pontos)} pontos da lista?\n\nEles '
+                                     'saem também dos outros computadores (pelo GitHub). O '
+                                     'arquivo atual fica guardado ao lado, com a data no nome.',
                                      'Começar de novo'):
             return
         carimbo = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
@@ -388,7 +609,8 @@ class CampoTrabalho(Modulo):
                     w.writerow([p['numero'], p['nome'], p['tipo'], p['ferramenta'],
                                 '' if comp is None else comp, p['data_hora'], p['fonte']]
                                + p['juntas']
-                               + ['' if v is None else v for v in forca])
+                               + ['' if v is None else v for v in forca]
+                               + [p.get('id', ''), p.get('modificado_em', '')])
             os.replace(temporario, caminho)
             return True
         except OSError as e:
@@ -397,7 +619,46 @@ class CampoTrabalho(Modulo):
             return False
 
     def _salvar_pontos(self):
-        return self._escrever_csv(PONTOS_PATH)
+        with self.sinc.trava_arquivo:
+            ok = self._escrever_csv(PONTOS_PATH)
+        if ok:
+            self._timer_envio.start()        # manda para o GitHub (os outros computadores)
+        return ok
+
+    # --- sincronia com os outros computadores ---
+
+    def _sincronizar(self):
+        if self._sinc_rodando:
+            self._sinc_de_novo = True
+            return
+        self._sinc_rodando = True
+        self.sinc_txt.setText('Sincronizando com o GitHub…')
+        n = len(self.pontos)
+        threading.Thread(target=lambda: self.sincronizado.emit(
+            *self.sinc.sincronizar(f'pontos do campo de trabalho ({n} pontos)')),
+            daemon=True).start()
+
+    def _ao_sincronizar(self, ok, texto, mudou_aqui):
+        self._sinc_rodando = False
+        hora = datetime.datetime.now().strftime('%H:%M')
+        if ok:
+            self.sinc_txt.setText(f'✔ Sincronizado com o GitHub às {hora}: {texto}.')
+            self.sinc_txt.setStyleSheet(f'color: {COR["sucesso"]};')
+        else:
+            self.sinc_txt.setText(f'Não sincronizou ({hora}): {texto}. Os pontos estão salvos '
+                                  'neste computador e vão para o GitHub na próxima vez.')
+            self.sinc_txt.setStyleSheet(f'color: {COR["aviso_texto"]};')
+            self.janela.log(f'Sincronia dos pontos falhou: {texto}', 'AVISO')
+        if mudou_aqui:
+            selecionado = (self._selecionado() or {}).get('id')
+            self._carregar_pontos()
+            for i, p in enumerate(self.pontos):
+                if p.get('id') == selecionado:
+                    self.tab.selectRow(i)
+            self.janela.log('Pontos do campo atualizados com os do outro computador.')
+        if self._sinc_de_novo:
+            self._sinc_de_novo = False
+            self._sincronizar()
 
     def _carregar_pontos(self):
         self.pontos = []
@@ -422,6 +683,8 @@ class CampoTrabalho(Modulo):
                         'fonte': linha.get('fonte', ''),
                         'juntas': juntas,
                         'forca': None if None in forca else forca,
+                        'id': id_do_ponto(linha),
+                        'modificado_em': linha.get('modificado_em') or '',
                     })
         except FileNotFoundError:
             pass
@@ -452,4 +715,5 @@ class CampoTrabalho(Modulo):
         if len(ferramentas) > 1:
             self.contagem_txt.setText(self.contagem_txt.text() + '  ·  atenção: pontos da base '
                                       'medidos com ferramentas diferentes')
-        self._atualizar_botoes()
+        self._ponto_selecionado()
+        self._atualizar_campo_3d()

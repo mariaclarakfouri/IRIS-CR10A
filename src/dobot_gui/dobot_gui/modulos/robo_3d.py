@@ -87,8 +87,8 @@ class Robo3D(Modulo):
         cartao = Cartao(texto='Arraste para girar, use a roda para aproximar e o botão '
                               'direito para mover a vista.')
         # O que desenhar no flange: a ferramenta com que a plataforma foi aberta
-        # (iris = célula, iris sem-nada = nada).
-        ponta = getattr(self.janela.ros_node, 'ponta', 'celula')
+        # (iris com-celula = célula; sem a opção, nada).
+        ponta = getattr(self.janela.ros_node, 'ponta', 'nada')
         self._ferramenta = 'celula' if ponta == 'celula' else None
         self.mostrar_sensor = QCheckBox(
             'Mostrar a célula de carga FA7155 (com a ponteira) no flange')

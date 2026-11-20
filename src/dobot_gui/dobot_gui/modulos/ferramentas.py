@@ -253,11 +253,12 @@ class Ferramentas(Modulo):
         """Avisa quando a escolha não bate com o jeito que o iris foi aberto
         (a célula é a única ferramenta que liga coisas: o nó dela e o desenho)."""
         if self.ponta_aberta == CELULA and self.ativa_nome != CELULA:
-            txt = ('O IRIS foi aberto com a célula na ponta (iris / iris gemeo). Se a célula '
-                   'saiu do robô, abra com "sem-nada".')
+            txt = ('O IRIS foi aberto com a célula na ponta (com-celula). Se a célula saiu '
+                   'do robô, abra sem o "com-celula".')
         elif self.ponta_aberta != CELULA and self.ativa_nome == CELULA:
-            txt = ('O IRIS foi aberto com "sem-nada": a aba Célula de Carga e o desenho da '
-                   'célula no Robô 3D estão desligados. Para usar a célula, abra sem o "sem-nada".')
+            txt = ('O IRIS foi aberto sem a célula: a aba Célula de Carga e o desenho da '
+                   'célula no Robô 3D estão desligados. Para usar a célula, abra com '
+                   '"com-celula" (iris com-celula ou iris gemeo com-celula).')
         else:
             txt = ''
         self.ativa_aviso.setText(txt)
@@ -392,7 +393,7 @@ class Ferramentas(Modulo):
                 continue
             self.ferramentas.append(nova)
         # A ferramenta salva só vale se combina com o jeito que o iris foi aberto:
-        # aberto com a célula, é a célula; aberto sem-nada, qualquer outra.
+        # aberto com a célula (com-celula), é a célula; sem ela, qualquer outra.
         salva = dados.get('ferramenta_ativa')
         nomes = {f['nome'] for f in self.ferramentas}
         if self.ponta_aberta == CELULA:

@@ -27,12 +27,18 @@ A base da interface:
   clicar em Parar. Fica na barra de cima e no cartão da home. Só no robô real.
 - **Parar movimento** e **EMERGÊNCIA**.
 - **Célula de Carga** (FA7155): força e momento ao vivo em gráfico e tara.
-- **Robô 3D**: o CR10A em 3D seguindo o robô em tempo real, com a célula na ponta. O comando
+- **Robô 3D**: o CR10A em 3D seguindo o robô em tempo real, com o que estiver na ponta (nada ou, com `com-celula`, a célula). O comando
   pelo 3D fica desligado até existir a verificação de segurança.
 - **Ferramentas**: qual ferramenta está na ponta e as medidas de cada uma (comprimento,
   desvio, raio, massa). A célula de carga FA7155 já vem cadastrada.
 - **Campo de Trabalho**: grava os pontos medidos no laboratório (base e teto), cada um com
   nome, os 6 ângulos do robô e a ferramenta na ponta, em `~/.config/iris/pontos_campo.csv`.
+  Os pontos são os mesmos em todos os computadores: vão e vêm sozinhos pelo GitHub, num ramo
+  só deles (`pontos-campo`), sem levar código. Sem internet, ficam salvos e vão depois.
+  Com o robô 3D da aba: o campo de trabalho calculado em volta do robô (chão pelos pontos da
+  base, teto pelos do teto e a parede indo do contorno da base ao do teto, sem passar de
+  nenhum dos dois nem do alcance do braço), clicar num ponto
+  mostra ele em azul, e "Levar até o ponto" move o robô (ou o gêmeo) até lá.
 - **Registro** de tudo o que foi feito.
 - **Gêmeo virtual** do CR10A no Gazebo: no modo simulação, os comandos movem só o gêmeo, e
   o robô real não é tocado; no modo real, o gêmeo segue o robô.
@@ -48,10 +54,10 @@ A base da interface:
 
 | Comando | O que faz |
 |---|---|
-| `iris` | Abre a interface com o **robô real** e a **célula de carga** na ponta, com o gêmeo seguindo em tempo real |
-| `iris gemeo` | Abre em **simulação**, com a **célula de carga** na ponta: só o gêmeo virtual se move |
-| `iris sem-gemeo` | Robô real com a célula de carga, sem abrir o gêmeo |
-| `iris sem-nada` | Robô real **sem nada na ponta** (sem a célula). Combina com os outros: `iris gemeo sem-nada` abre a simulação sem a célula |
+| `iris` | Abre a interface com o **robô real**, **sem nada na ponta**, com o gêmeo seguindo em tempo real |
+| `iris gemeo` | Abre em **simulação**, **sem nada na ponta**: só o gêmeo virtual se move |
+| `iris sem-gemeo` | Robô real sem nada na ponta, sem abrir o gêmeo |
+| `iris com-celula` | Robô real com a **célula de carga** na ponta. Combina com os outros: `iris gemeo com-celula` abre a simulação com a célula |
 | `iris code` | Abre o código no VS Code |
 | `iris mudancas` | Mostra o que mudou desde a última versão salva |
 | `iris salvar "descrição"` | Salva as mudanças e envia para este repositório |

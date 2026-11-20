@@ -19,6 +19,7 @@ from PyQt5.QtCore import QPointF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPen
 from PyQt5.QtWidgets import QSizePolicy, QWidget
 
+from .campo import Campo
 from .robot3d_render import Camera, scene_triangles, shade_and_sort
 from .robot3d_scene import UrdfSceneError, parse_urdf
 
@@ -37,6 +38,12 @@ QUADRO_MS = 16                # até ~60 quadros por segundo enquanto se move
 ATRASO_S = 0.06               # o desenho fica este tempo atrás da última leitura
 PARADO_S = 0.3                # sem mudar por este tempo: desenha o modelo detalhado
 CR10_REACH_M = 1.375
+# Campo de trabalho (aba Campo de Trabalho): faces translúcidas, arestas e pontos.
+CAMPO_FACE = QColor(56, 189, 248, 38)
+CAMPO_CHAO = QColor(56, 189, 248, 60)
+CAMPO_ARESTA = QColor(125, 211, 252, 200)
+CAMPO_PONTO_BASE = QColor(250, 204, 21)
+CAMPO_PONTO_TETO = QColor(244, 114, 182)
 GROUND_Z = -0.03  # o modelo tem a base 3 cm acima do chão (world_joint)
 
 # Alvo: arrastar 1 px gira a junta escolhida tanto (Shift: ajuste fino).
@@ -44,7 +51,8 @@ GRAUS_POR_PX = 0.5
 GRAUS_POR_PX_FINO = 0.1
 ALVO_ALFA = 120                  # 0..255: quão opaco é o robô-alvo
 # Cor do alvo conforme a verificação do caminho até ele.
-CORES_ALVO = {'ok': (44, 160, 44), 'ruim': (214, 39, 40), 'conferindo': (240, 170, 30)}
+CORES_ALVO = {'ok': (44, 160, 44), 'ruim': (214, 39, 40), 'conferindo': (240, 170, 30),
+              'ponto': (59, 130, 246)}   # azul: ponto do Campo de Trabalho (não é verificação)
 # Peça do modelo -> junta (0..5) que a move.
 JUNTA_DA_PECA = {'Link1': 0, 'Link2': 1, 'Link3': 2, 'Link4': 3, 'Link5': 4, 'Link6': 5,
                  'sensor_s02': 5, 'ft_flange_link': 5, 'load_cell_link': 5,
@@ -229,6 +237,8 @@ class RobotView(QWidget):
         self._timer.timeout.connect(self._quadro)
 
         self._cores_qt = {}               # cor (ARGB em um inteiro) -> QColor
+        # Campo de trabalho: (campo.Campo, grade (n_z, n_ang, 3) em metros) ou None.
+        self._campo = None
         self.scene = None
         self._cena_leve = None
         self._cena = None                 # a que está desenhada agora (detalhada ou leve)
@@ -314,11 +324,75 @@ class RobotView(QWidget):
         self.update()
 
     def definir_estado_alvo(self, estado):
-        """'ok' (verde), 'ruim' (vermelho) ou 'conferindo' (amarelo)."""
+        """'ok' (verde), 'ruim' (vermelho), 'conferindo' (amarelo) ou 'ponto' (azul)."""
         if estado != self._alvo_estado:
             self._alvo_estado = estado
             self._rebuild()
             self.update()
+
+    def definir_campo(self, base_deg, teto_deg):
+        """Desenha o campo de trabalho CALCULADO (campo.Campo) a partir dos pontos
+        medidos (listas de 6 ângulos, convenção Dobot): chão e contorno pelos
+        pontos da base, teto pelos do teto e o alcance do braço em cada altura.
+        Menos de 3 pontos da base ou nenhum do teto apaga o desenho. Devolve o
+        Campo (ou None)."""
+        self._campo = None
+        if self.scene is not None and len(base_deg) >= 3 and len(teto_deg) >= 1:
+            def flanges(lista):
+                return [self.scene.link_transforms(dobot_deg_to_joint_values(q))
+                        ['Link6'][:3, 3] * 1000.0 for q in lista]
+            campo = Campo(flanges(base_deg), flanges(teto_deg))
+            g = campo.malha(n_ang=72, n_z=20) / 1000.0
+            self._campo = (campo, g)
+        self.update()
+        return self._campo[0] if self._campo else None
+
+    def _draw_campo(self, painter, w, h, parte):
+        """parte='faces' (atrás do robô) ou 'linhas' (por cima, finas)."""
+        if self._campo is None:
+            return
+        cam = self.camera
+        campo, g = self._campo
+        nz, na, _ = g.shape
+        uv, d = cam.project(g.reshape(-1, 3), w, h)
+        uv, d = uv.reshape(nz, na, 2), d.reshape(nz, na)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        if parte == 'faces':
+            painter.setPen(Qt.NoPen)
+            polis = []
+            for i in range(nz - 1):
+                for j in range(na):
+                    k = (j + 1) % na
+                    dd = (d[i, j], d[i, k], d[i + 1, k], d[i + 1, j])
+                    if min(dd) > cam.near:
+                        polis.append((sum(dd) / 4, (uv[i, j], uv[i, k], uv[i + 1, k],
+                                                    uv[i + 1, j]), CAMPO_FACE))
+            for fila, cor in ((0, CAMPO_CHAO), (nz - 1, CAMPO_CHAO)):   # chão e teto
+                if np.all(d[fila] > cam.near):
+                    polis.append((float(d[fila].mean()), tuple(uv[fila]), cor))
+            for _d, pts, cor in sorted(polis, key=lambda x: -x[0]):    # longe primeiro
+                painter.setBrush(cor)
+                painter.drawPolygon(*[QPointF(float(p[0]), float(p[1])) for p in pts])
+            return
+        # Linhas: anéis em algumas alturas e meridianos a cada 30°.
+        painter.setPen(QPen(CAMPO_ARESTA, 1.2))
+        for i in sorted({0, nz // 3, 2 * nz // 3, nz - 1}):
+            for j in range(na):
+                k = (j + 1) % na
+                if d[i, j] > cam.near and d[i, k] > cam.near:
+                    painter.drawLine(QPointF(*uv[i, j]), QPointF(*uv[i, k]))
+        for j in range(0, na, max(1, na // 12)):
+            for i in range(nz - 1):
+                if d[i, j] > cam.near and d[i + 1, j] > cam.near:
+                    painter.drawLine(QPointF(*uv[i, j]), QPointF(*uv[i + 1, j]))
+        # Os pontos medidos.
+        painter.setPen(Qt.NoPen)
+        for pts, cor in ((campo.base, CAMPO_PONTO_BASE), (campo.teto, CAMPO_PONTO_TETO)):
+            puv, pd = cam.project(np.asarray(pts) / 1000.0, w, h)
+            painter.setBrush(cor)
+            for p, dd in zip(puv.tolist(), pd.tolist()):
+                if dd > cam.near:
+                    painter.drawEllipse(QPointF(*p), 3.5, 3.5)
 
     def set_caption(self, text):
         if text != self._caption:
@@ -359,7 +433,9 @@ class RobotView(QWidget):
             return
 
         self._draw_ground(painter, w, h)
+        self._draw_campo(painter, w, h, 'faces')
         self._draw_robot(painter, w, h)
+        self._draw_campo(painter, w, h, 'linhas')
         self._draw_hud(painter, w, h)
 
     def _draw_ground(self, painter, w, h):

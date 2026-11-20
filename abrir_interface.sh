@@ -4,24 +4,25 @@
 #   iris                    robô REAL, com o gêmeo seguindo em tempo real
 #   iris gemeo              SIMULAÇÃO: só o gêmeo virtual se move, o robô real não
 #   iris sem-gemeo          robô REAL, sem abrir o gêmeo
-#   iris sem-nada           sem a célula de carga na ponta (padrão: com a célula)
+#   iris com-celula         com a célula de carga na ponta (padrão: nada na ponta)
 #
-# As opções se combinam: iris gemeo sem-nada
+# As opções se combinam: iris gemeo com-celula
 set -e
 
 # A pasta do projeto é a deste arquivo: funciona em qualquer computador e pasta.
 WORKSPACE_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 
-FERRAMENTA=celula
+FERRAMENTA=nada
 ARGS=()
 for opcao in "$@"; do
     case "$opcao" in
         gemeo|sim)   ARGS+=(modo:=sim) ;;
         sem-gemeo)   ARGS+=(gemeo:=false) ;;
-        sem-nada)    FERRAMENTA=nada ;;
+        com-celula|com-célula) FERRAMENTA=celula ;;
+        sem-nada)    FERRAMENTA=nada ;;     # nome antigo: já é o padrão
         *)
             echo "Opção desconhecida: $opcao"
-            echo "Use: iris [gemeo | sem-gemeo] [sem-nada]   (iris ajuda para detalhes)"
+            echo "Use: iris [gemeo | sem-gemeo] [com-celula]   (iris ajuda para detalhes)"
             exit 1
             ;;
     esac

@@ -1,29 +1,159 @@
 """Peças visuais reutilizáveis da interface (usadas pela base e pelos módulos)."""
 import time
 
-from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QObject, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
+    QAbstractSlider,
+    QAbstractSpinBox,
+    QApplication,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QProgressBar,
     QPushButton,
+    QScrollArea,
+    QScrollBar,
     QSlider,
     QSpinBox,
+    QStyle,
+    QStyleOptionSlider,
     QVBoxLayout,
 )
 
 from .tema import COR, make_icon
 
 
+class TravaMouse(QObject):
+    """Filtro de eventos da interface inteira: nenhum valor muda sem querer.
+
+    * A rodinha do mouse NUNCA muda barras, campos numéricos nem listas: ela
+      rola a página, como se o mouse estivesse fora deles. (Uma rolada em cima
+      da barra de uma junta movia o robô.)
+    * Barras (juntas, velocidade) só mudam clicando NA BOLINHA e arrastando:
+      clique na trilha, botão do meio/direito e teclado não fazem nada.
+    Os campos numéricos continuam aceitando digitar + Enter e as setinhas."""
+
+    _BLOQUEAR_RODA = (QAbstractSlider, QAbstractSpinBox, QComboBox)
+    _CLIQUES = (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick)
+
+    def eventFilter(self, obj, event):
+        tipo = event.type()
+        # A barra de rolagem da página é um QAbstractSlider também: essa rola.
+        if (tipo == QEvent.Wheel and isinstance(obj, self._BLOQUEAR_RODA)
+                and not isinstance(obj, QScrollBar)):
+            self._rolar_pagina(obj, event)
+            return True
+        if isinstance(obj, QSlider):
+            if tipo in self._CLIQUES:
+                return not (event.button() == Qt.LeftButton
+                            and self._na_bolinha(obj, event.pos()))
+            if tipo in (QEvent.KeyPress, QEvent.KeyRelease):
+                return True
+        return False
+
+    @staticmethod
+    def _na_bolinha(slider, pos):
+        opt = QStyleOptionSlider()
+        slider.initStyleOption(opt)
+        bolinha = slider.style().subControlRect(
+            QStyle.CC_Slider, opt, QStyle.SC_SliderHandle, slider)
+        return bolinha.adjusted(-3, -3, 3, 3).contains(pos)
+
+    @staticmethod
+    def _rolar_pagina(obj, event):
+        w = obj.parentWidget()
+        while w is not None and not isinstance(w, QScrollArea):
+            w = w.parentWidget()
+        if w is not None:
+            QApplication.sendEvent(w.verticalScrollBar(), event)
+
+
 class JointSpinBox(QSpinBox):
-    """QSpinBox que avisa quando o valor muda pelas setinhas (stepBy)."""
+    """Campo de uma junta: avisa quando o valor muda pelas setinhas (stepBy).
+
+    Segunda trava, além do TravaMouse: o passo (stepBy) só acontece com o botão
+    esquerdo apertado numa setinha ou com uma tecla no campo. A rodinha do mouse
+    nunca muda o valor, nem em cima das setinhas, venha o evento por onde vier.
+
+    Valor digitado só vale com Enter (sinal `confirmado`). Clicar fora sem Enter
+    descarta o que foi digitado e volta o valor anterior: um "4" pela metade de
+    "45" nunca vira movimento."""
 
     stepped = pyqtSignal()
+    confirmado = pyqtSignal()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._tecla = False
+        self.setFocusPolicy(Qt.StrongFocus)      # a rodinha não dá foco ao campo
+        self.setKeyboardTracking(False)          # o valor só muda no Enter
+
+    def editando(self):
+        """True se há algo digitado ainda sem Enter."""
+        return self.lineEdit().text() != self.prefix() + self.textFromValue(self.value()) \
+            + self.suffix()
+
+    def focusOutEvent(self, event):
+        if self.editando():
+            self.lineEdit().setText(self.prefix() + self.textFromValue(self.value())
+                                    + self.suffix())
+        super().focusOutEvent(event)
+
+    def wheelEvent(self, event):
+        event.ignore()                           # vai para a página (rola)
+
+    def keyPressEvent(self, event):
+        self._tecla = True
+        try:
+            super().keyPressEvent(event)
+        finally:
+            self._tecla = False
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self.confirmado.emit()
 
     def stepBy(self, steps):
+        clique = bool(QApplication.mouseButtons() & Qt.LeftButton)
+        if not (clique or self._tecla):
+            return
         super().stepBy(steps)
         self.stepped.emit()
+
+
+class BarraSegura(QSlider):
+    """Barra que só muda clicando na bolinha e arrastando (juntas e velocidade).
+    Rodinha, teclado e cliques fora da bolinha não fazem nada. É a segunda trava,
+    além do TravaMouse."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.NoFocus)
+
+    def wheelEvent(self, event):
+        event.ignore()                           # vai para a página (rola)
+
+    def keyPressEvent(self, event):
+        event.ignore()
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.LeftButton or not TravaMouse._na_bolinha(self, event.pos()):
+            event.accept()                       # engole o clique: nada muda
+            return
+        self._na_mao = True
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        self.mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if getattr(self, '_na_mao', False):
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        # Só solta (e manda o movimento) se o clique começou na bolinha.
+        if getattr(self, '_na_mao', False):
+            self._na_mao = False
+            super().mouseReleaseEvent(event)
 
 
 def sincronizar(slider, spin):
@@ -44,7 +174,7 @@ def sincronizar(slider, spin):
 
 def barra_e_campo(minimo, maximo, valor, sufixo='', spin_cls=QSpinBox):
     """Cria (barra, campo) já sincronizados."""
-    slider = QSlider(Qt.Horizontal)
+    slider = BarraSegura(Qt.Horizontal)
     slider.setRange(minimo, maximo)
     slider.setValue(valor)
     spin = spin_cls()

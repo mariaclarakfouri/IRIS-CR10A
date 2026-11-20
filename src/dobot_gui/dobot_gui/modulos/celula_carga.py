@@ -61,7 +61,7 @@ SOLTA_N = 0.2                # abaixo disso (em módulo) a ponteira está solta
 # disso o número é ruído, e o valor grande da ponteira mostra 0,00 N.
 RESOLUCAO_N = 0.0003 * 400.0
 SEM_DADOS = ('Sem dados da célula. Abra com a célula: iris (robô real) ou iris '
-             'gemeo (gêmeo virtual); sem-nada abre sem ela.')
+             'gemeo (gêmeo virtual) com "com-celula": iris com-celula ou iris gemeo com-celula.')
 
 
 def _motivo_sem_dados(e):
@@ -379,8 +379,8 @@ class CelulaCarga(Modulo):
         if not e or agora - self._estado_t > 3.0:
             self._mostrar_status('● offline', COR['perigo'],
                                  'O nó da célula não está rodando. Abra a plataforma com a '
-                                 'célula: iris (robô real) ou iris gemeo (gêmeo '
-                                 'virtual); sem-nada abre sem ela.')
+                                 'célula: iris com-celula (robô real) ou iris gemeo '
+                                 'com-celula (gêmeo virtual).')
             return
         gemeo = e.get('fonte') == 'simulacao'
         origem = 'gêmeo virtual' if gemeo else f'célula real em {e.get("porta") or "?"}'

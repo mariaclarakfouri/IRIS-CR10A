@@ -24,8 +24,10 @@ class ControleJuntas(Modulo):
 
         juntas = Cartao(
             'Juntas',
-            'Cada junta vai de -180° a 180°. O robô se move enquanto você arrasta a '
-            'barra, usa as setinhas ou digita um valor e aperta Enter. Depois de '
+            'Cada junta vai de -180° a 180°. O robô se move quando você clica na bolinha '
+            'da barra e arrasta, clica nas setinhas ou digita um valor e aperta Enter '
+            '(sem Enter, o valor digitado é descartado). A rodinha do mouse e cliques '
+            'fora da bolinha não mexem em nada. Depois de '
             'conectar, os valores mostrados são lidos direto do robô.')
         grade = QGridLayout()
         grade.setHorizontalSpacing(14)
@@ -44,7 +46,7 @@ class ControleJuntas(Modulo):
             # cada grau intermediário.
             slider.valueChanged.connect(lambda _v: self._jog_debounce.start())
             slider.sliderReleased.connect(self._request_jog_now)
-            spin.editingFinished.connect(self._request_jog)
+            spin.confirmado.connect(self._request_jog)       # só no Enter
             spin.stepped.connect(self._request_jog)
             grade.addWidget(rotulo(nome), i, 0)
             grade.addWidget(slider, i, 1)
@@ -96,6 +98,8 @@ class ControleJuntas(Modulo):
         if not robo_parado:
             return
         for spin, value in zip(self.joint_spinboxes, juntas):
+            if spin.hasFocus() and spin.editando():
+                continue                  # não apaga o que você está digitando
             spin.setValue(round(value))
 
     # --- movimento manual ---
