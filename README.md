@@ -35,10 +35,25 @@ A base da interface:
   nome, os 6 ângulos do robô e a ferramenta na ponta, em `~/.config/iris/pontos_campo.csv`.
   Os pontos são os mesmos em todos os computadores: vão e vêm sozinhos pelo GitHub, num ramo
   só deles (`pontos-campo`), sem levar código. Sem internet, ficam salvos e vão depois.
-  Com o robô 3D da aba: o campo de trabalho calculado em volta do robô (chão pelos pontos da
-  base, teto pelos do teto e a parede indo do contorno da base ao do teto, sem passar de
-  nenhum dos dois nem do alcance do braço), clicar num ponto
+  Com o robô 3D da aba: o campo de trabalho calculado em volta do robô (os pontos são
+  juntados em planos pela altura; cada plano tem como borda o contorno dos pontos em volta,
+  os pontos "mesa" e "começo …" só dão a altura do plano; entre dois planos a parede vai
+  em linha reta de um contorno ao outro, sem passar do alcance do braço), clicar num ponto
   mostra ele em azul, e "Levar até o ponto" move o robô (ou o gêmeo) até lá.
+  Um segundo robô 3D mostra o **campo calculado pela base**: paredes verticais subindo do
+  contorno dos pontos da base, cortadas pelo alcance do braço com a ponta para baixo
+  (cinemática inversa), sem passar do campo medido.
+- **Segurança dos movimentos**: todo movimento por comando (juntas, Home, Robô 3D, levar até
+  um ponto) é conferido pelo servidor antes de ir para o robô. O caminho inteiro do MovJ é
+  calculado (cinemática direta, a cada 0,5° nas juntas); se o flange, ou a ponta da célula de
+  carga com `com-celula`, sairia do campo calculado pela base em qualquer momento, o
+  movimento é recusado e a interface avisa que o ponto não é seguro. Os **obstáculos** são
+  conferidos com o robô inteiro (braço, cotovelo, antebraço, punho, flange e ferramenta, pelas
+  malhas 3D): nenhuma peça pode descer abaixo do tampo da mesa (altura pelo ponto "mesa"),
+  passar das paredes retas do computador e da esquerda, nem subir acima do teto. Paredes e
+  teto ficam onde o corpo do robô chegou na medição (`PAREDES` e `TETO_MM` em
+  `dobot_gui/seguranca.py`). O "Mover manualmente"
+  (guiar com a mão) não passa por essa conferência.
 - **Registro** de tudo o que foi feito.
 - **Gêmeo virtual** do CR10A no Gazebo: no modo simulação, os comandos movem só o gêmeo, e
   o robô real não é tocado; no modo real, o gêmeo segue o robô.

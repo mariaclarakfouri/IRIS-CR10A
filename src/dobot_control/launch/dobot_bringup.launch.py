@@ -55,7 +55,9 @@ def _setup(context):
             executable='dobot_action_server',
             name='dobot_action_server',
             output='screen',
-            parameters=[{'robot_ip': robot_ip, 'modo': modo}],
+            # 'ponta': com a célula, a ponta dela também não pode sair do campo.
+            parameters=[{'robot_ip': robot_ip, 'modo': modo,
+                         'ponta': 'celula' if celula else 'nada'}],
         ),
         Node(
             package='dobot_gui',

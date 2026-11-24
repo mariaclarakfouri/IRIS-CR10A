@@ -11,10 +11,18 @@ import numpy as np
 
 _WORLD_UP = np.array([0.0, 0.0, 1.0])
 
-# Direção da luz no frame da câmera (headlight deslocado p/ dar relevo).
-_LIGHT_CAM = np.array([-0.35, 0.55, -0.75])
-_AMBIENT = 0.90
-_DIFFUSE = 0.20
+# Luzes no frame da câmera (right, up, forward), apontando PARA a luz: giram
+# junto com o observador, então a peça nunca fica toda escura ao orbitar.
+_LUZ_PRINCIPAL = np.array([-0.45, 0.80, -0.45])   # do alto, à esquerda, pela frente
+_LUZ_PREENCHE = np.array([0.70, -0.15, -0.55])    # suave, do outro lado
+_AMBIENTE = 0.30            # luz que vem de todo lado
+_CEU = 0.10                 # a mais nas faces viradas para cima (menos nas de baixo)
+_DIFUSA = 0.62
+_PREENCHE = 0.16
+_BRILHO = 0.30              # reflexo da luz principal (superfície lisa)
+_BRILHO_EXP = 28.0
+_BORDA = 0.22               # contorno azulado nas bordas (destaca do fundo escuro)
+_COR_BORDA = np.array([120.0, 170.0, 255.0])
 
 
 @dataclass
@@ -121,8 +129,74 @@ def scene_triangles(scene, transforms: dict) -> tuple:
     return world, scene.flat_colors
 
 
+# Normais suaves: em cada canto do triângulo, a média das normais das faces que
+# se encontram ali (a peça parece lisa, sem facetas). Faces com mais que este
+# ângulo de diferença não se misturam: quinas de verdade continuam marcadas.
+ANGULO_QUINA_GRAUS = 40.0
+
+
+def normais_suaves(scene):
+    """(M, 3, 3): normal de cada canto de cada triângulo, no frame do link.
+    Calculada uma vez por cena e guardada nela."""
+    pronto = getattr(scene, '_normais_cantos', None)
+    if pronto is not None:
+        return pronto
+    tris = scene.flat_tris
+    fn = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
+    fn = fn / np.maximum(np.linalg.norm(fn, axis=1, keepdims=True), 1e-15)
+    # Mesmo vértice = mesma posição (arredondada) na mesma peça.
+    pos = np.round(tris.reshape(-1, 3) * 1e5).astype(np.int64)
+    peca = np.repeat(scene.flat_part.astype(np.int64), 3)
+    _u, vid = np.unique(np.c_[pos, peca], axis=0, return_inverse=True)
+    vid = vid.ravel()
+    face_do_canto = np.repeat(fn, 3, axis=0)                  # (3M, 3)
+    soma = np.zeros((vid.max() + 1, 3))
+    np.add.at(soma, vid, face_do_canto)
+    n = soma[vid]
+    n = n / np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-15)
+    quina = np.einsum('ij,ij->i', n, face_do_canto) < math.cos(math.radians(ANGULO_QUINA_GRAUS))
+    if np.any(quina):
+        # Na quina: média só com as faces parecidas com a deste canto.
+        idx = np.flatnonzero(quina)
+        for i in idx:
+            mesmos = np.flatnonzero(vid == vid[i])
+            parec = mesmos[np.einsum('ij,j->i', face_do_canto[mesmos], face_do_canto[i])
+                           >= math.cos(math.radians(ANGULO_QUINA_GRAUS))]
+            m = face_do_canto[parec].sum(axis=0)
+            n[i] = m / max(np.linalg.norm(m), 1e-15)
+    scene._normais_cantos = n.reshape(-1, 3, 3)
+    return scene._normais_cantos
+
+
+def scene_normais(scene, transforms: dict) -> np.ndarray:
+    """Normais suaves dos cantos (M, 3, 3) no mundo, para a pose do quadro."""
+    if getattr(scene, 'flat_tris', None) is None:
+        return None
+    eye4 = np.eye(4)
+    mats = np.stack([transforms.get(link, eye4) for link in scene.part_links])
+    R = mats[scene.flat_part, :3, :3]
+    return np.einsum('mij,mkj->mki', R, normais_suaves(scene))
+
+
+def _iluminar(normals, colors, r, u, f):
+    """Cor (N,3) float de cada normal (N,3) com a cor base (N,3)."""
+    def na_camera(v):
+        v = v[0] * r + v[1] * u + v[2] * f
+        return v / (np.linalg.norm(v) + 1e-12)
+    luz, preenche, olho = na_camera(_LUZ_PRINCIPAL), na_camera(_LUZ_PREENCHE), -f
+    lam = np.clip(normals @ luz, 0.0, 1.0)
+    lam2 = np.clip(normals @ preenche, 0.0, 1.0)
+    meio = luz + olho
+    meio = meio / (np.linalg.norm(meio) + 1e-12)
+    brilho = _BRILHO * np.clip(normals @ meio, 0.0, 1.0) ** _BRILHO_EXP
+    borda = _BORDA * (1.0 - np.clip(np.abs(normals @ olho), 0.0, 1.0)) ** 3
+    luz_total = _AMBIENTE + _CEU * normals[:, 2] + _DIFUSA * lam + _PREENCHE * lam2
+    return colors * luz_total[:, None] + 255.0 * brilho[:, None] + borda[:, None] * _COR_BORDA
+
+
 def shade_and_sort(tris: np.ndarray, colors: np.ndarray, cam: Camera,
-                   w: int, h: int, com_indices: bool = False) -> tuple:
+                   w: int, h: int, com_indices: bool = False,
+                   normais_cantos: np.ndarray | None = None) -> tuple:
     """Projeta, descarta o que não se vê e devolve tudo pronto para pintar.
 
     Returns:
@@ -156,6 +230,8 @@ def shade_and_sort(tris: np.ndarray, colors: np.ndarray, cam: Camera,
 
     indices = np.flatnonzero(keep)
     tris, colors, normals = tris[keep], colors[keep], normals[keep]
+    if normais_cantos is not None:
+        normais_cantos = normais_cantos[keep]
     centroid = centroid[keep]
 
     rel = tris.reshape(-1, 3) - eye
@@ -174,15 +250,19 @@ def shade_and_sort(tris: np.ndarray, colors: np.ndarray, cam: Camera,
     uv[:, 1] = 0.5 * h - fpx * (rel @ u) / z
     uv = uv.reshape(-1, 3, 2)[front]
     colors, normals, indices = colors[front], normals[front], indices[front]
+    if normais_cantos is not None:
+        normais_cantos = normais_cantos[front]
     depth = zt[front].mean(axis=1)
 
-    # Lambert com a luz fixa NA CÂMERA: gira junto com o observador, então
-    # a peça nunca fica totalmente escura ao orbitar.
-    light = _LIGHT_CAM[0] * r + _LIGHT_CAM[1] * u + _LIGHT_CAM[2] * f
-    light = light / (np.linalg.norm(light) + 1e-12)
-    lam = np.clip(normals @ (-light), 0.0, 1.0)
-    shade = (_AMBIENT + _DIFFUSE * lam)[:, None]
-    rgb = np.clip(colors * shade, 0, 255).astype(np.uint8)
+    # Iluminação: com normais suaves, a cor de cada canto e a média dos três
+    # (a peça parece lisa); sem elas, uma cor por face.
+    if normais_cantos is not None:
+        k = normais_cantos.shape[0]
+        cor = _iluminar(normais_cantos.reshape(-1, 3), np.repeat(colors, 3, axis=0), r, u, f)
+        rgb = cor.reshape(k, 3, 3).mean(axis=1)
+    else:
+        rgb = _iluminar(normals, colors, r, u, f)
+    rgb = np.clip(rgb, 0, 255).astype(np.uint8)
 
     order = np.argsort(-depth)          # do mais longe para o mais perto
     if com_indices:

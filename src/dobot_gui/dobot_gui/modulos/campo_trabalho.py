@@ -50,6 +50,8 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem,
 )
 
+from ..campo import eh_referencia
+from ..seguranca import altura_da_mesa, modelo_robo
 from ..constantes import JOINT_NAMES, SETTINGS_PATH
 from ..robot_view import RobotView
 from ..sincronia import Sincronia, id_do_ponto
@@ -137,6 +139,7 @@ class CampoTrabalho(Modulo):
         linha.addWidget(self._cartao_pontos(), 3)
         linha.addWidget(self._cartao_3d(), 2)
         self.layout_modulo.addLayout(linha, 1)
+        self.layout_modulo.addWidget(self._cartao_3d_base())
         self.sinc = Sincronia(PONTOS_PATH)
         self._sinc_rodando = False
         self._sinc_de_novo = False
@@ -235,6 +238,33 @@ class CampoTrabalho(Modulo):
         c.corpo.addWidget(self.ir_dica)
         return c
 
+    def _cartao_3d_base(self):
+        c = Cartao('Campo calculado pela base · é o que vale na segurança',
+                   'Com os pontos da base (o plano da mesa) e a cinemática do robô: paredes '
+                   'imaginárias verticais subindo do contorno da base, cortadas por até onde o '
+                   'braço chega com a ponta para baixo em cada altura. Nunca passa do campo '
+                   'medido ponto a ponto. Todo movimento por comando é recusado se, no destino '
+                   'ou no caminho, o flange (ou a ponta da célula) sair deste campo, ou se '
+                   'qualquer peça do robô bater na mesa, nas paredes retas (computador e '
+                   'esquerda) ou no teto.')
+        ponta = getattr(self.janela.ros_node, 'ponta', 'celula')
+        self.robot_view_base = RobotView(ferramenta='celula' if ponta == 'celula' else None)
+        self.robot_view_base.setMinimumHeight(460)
+        self.robot_view_base.camera.dist = 3.9
+        self.robot_view_base.camera.el = math.radians(24.0)
+        self.robot_view_base.camera.target = np.array([0.0, 0.0, 0.62])
+        c.corpo.addWidget(self.robot_view_base, 1)
+        self.campo_base_txt = rotulo('', 'cartaoTexto')
+        self.campo_base_txt.setWordWrap(True)
+        self.campo_base_txt.setStyleSheet(f'color: {COR["texto_fraco"]};')
+        c.corpo.addWidget(self.campo_base_txt)
+        return c
+
+    def _vistas(self):
+        """Os dois robôs 3D da aba (o do campo medido e o do calculado pela base)."""
+        return [v for v in (getattr(self, 'robot_view', None),
+                            getattr(self, 'robot_view_base', None)) if v is not None]
+
     def _cartao_pontos(self):
         c = Cartao('Pontos gravados', f'Salvos em {PONTOS_PATH} (abre em planilha) e iguais em '
                                       'todos os computadores, pelo GitHub. Para mudar o nome de '
@@ -282,13 +312,15 @@ class CampoTrabalho(Modulo):
         self._juntas = list(juntas)
         self._parado = bool(robo_parado)
         if time.monotonic() - self._ultimo_fluxo > FLUXO_MUDO_S:
-            self.robot_view.set_joints_deg(juntas)
+            for v in self._vistas():
+                v.set_joints_deg(juntas)
         self._atualizar_botoes()
 
     def _ao_receber_estado(self, q):
         if len(q) == 6:
             self._ultimo_fluxo = time.monotonic()
-            self.robot_view.seguir(q)
+            for v in self._vistas():
+                v.seguir(q)
 
     # ------------------------------------------------------------------
     # Ponto no 3D e levar o robô até ele
@@ -303,29 +335,101 @@ class CampoTrabalho(Modulo):
     def _atualizar_campo_3d(self):
         if not hasattr(self, 'robot_view'):
             return
-        base = [p['juntas'] for p in self.pontos if p['tipo'] == 'base']
-        teto = [p['juntas'] for p in self.pontos if p['tipo'] == 'teto']
-        campo = self.robot_view.definir_campo(base, teto) if self.mostrar_campo.isChecked() \
-            else self.robot_view.definir_campo([], [])
-        if campo is None:
-            self.campo_txt.setText('' if not self.mostrar_campo.isChecked() else
-                                   'Para calcular o campo: pelo menos 3 pontos da base e 1 do teto.')
+        self._atualizar_mesa()
+        self._atualizar_campo_base()
+        if not self.mostrar_campo.isChecked():
+            self.robot_view.definir_campo([])
+            self.campo_txt.setText('')
             return
+        borda = [p['juntas'] for p in self.pontos if not eh_referencia(p['nome'])]
+        refs = [p['juntas'] for p in self.pontos if eh_referencia(p['nome'])]
+        campo = self.robot_view.definir_campo(borda, refs)
+        if campo is None:
+            self.campo_txt.setText(
+                'Para calcular o campo: pelo menos 2 planos (alturas), cada um com 3 pontos '
+                'em volta do robô.')
+            return
+        alturas = ', '.join(f'{p.z:.0f}' for p in campo.planos)
+        aviso = (f' · {campo.ignorados} ponto(s) fora de qualquer plano (menos de 3 pontos '
+                 'naquela altura) ficaram de fora.' if campo.ignorados else '')
         self.campo_txt.setText(
-            f'Chão a {campo.chao_z:.1f} mm (pontos da base variam {campo.chao_variacao:.1f} mm) · '
-            f'teto a {campo.teto_z:.1f} mm (o ponto do teto mais baixo) · em volta: do contorno '
-            'amarelo (base) ao rosa (teto) em linha reta, sem passar de nenhum dos dois · o '
-            'alcance do braço só corta onde for menor. Alturas no referencial do robô, na '
-            'posição do flange (sem ferramenta).')
+            f'{len(campo.planos)} planos medidos, alturas {alturas} mm. Chão no primeiro, '
+            'topo no último. Em cada plano, a borda é o contorno dos pontos (amarelo); os '
+            'pontos "mesa" e "começo …" (rosa) só dão a altura. Entre dois planos, a parede '
+            'vai em linha reta de um contorno ao outro; o alcance do braço só corta onde for '
+            'menor. Posição do flange (sem ferramenta), no referencial do robô.' + aviso)
+
+    def _atualizar_mesa(self):
+        """O tampo da mesa nos dois 3D, na altura que a segurança usa (pelo
+        ponto "mesa": a parte mais baixa do robô naquela posição)."""
+        try:
+            self._mesa_z = altura_da_mesa(modelo_robo(),
+                                          [(p['nome'], p['juntas']) for p in self.pontos])
+        except Exception:
+            self._mesa_z = None
+        for v in self._vistas():
+            v.definir_mesa(self._mesa_z)
+
+    def _atualizar_campo_base(self):
+        """O segundo 3D: campo só com os pontos da base + cinemática, e a
+        comparação com os pontos medidos nos planos de cima."""
+        vista = getattr(self, 'robot_view_base', None)
+        if vista is None:
+            return
+        borda = [p for p in self.pontos if not eh_referencia(p['nome'])]
+        refs = [p['juntas'] for p in self.pontos if eh_referencia(p['nome'])]
+        campo = vista.definir_campo([p['juntas'] for p in borda], refs, so_base=True)
+        if campo is None:
+            self.campo_base_txt.setText('Para calcular: pelo menos 3 pontos da base (na mesma '
+                                        'altura, em volta do robô).')
+            return
+        # Comparação: os pontos medidos acima da base ficam dentro do calculado?
+        acima = [(p, xyz) for p, xyz in zip(borda, vista.flanges_mm([p['juntas'] for p in borda]))
+                 if xyz[2] > campo.chao_z + 15.0]
+        fora = []
+        for p, (x, y, z) in acima:
+            if not campo.dentro((x, y, z), -0.5):
+                lim = campo.raio(math.atan2(y, x), z)
+                fora.append((math.hypot(x, y) - lim if lim > 0 else float('inf'), p['nome'], z))
+        comparacao = ''
+        if acima:
+            comparacao = (f' Dos {len(acima)} pontos medidos acima da base, '
+                          f'{len(acima) - len(fora)} ficam dentro deste campo')
+            if fora:
+                fora.sort(reverse=True)
+                d, nome, _z = fora[0]
+                quanto = f'{d:.0f} mm' if d != float('inf') else 'acima do topo'
+                comparacao += (f' e {len(fora)} ficam fora (o que mais passa: {nome}, '
+                               f'{quanto}).')
+            else:
+                comparacao += '.'
+        if campo.limite is not None:
+            topo = (f'Topo a {campo.teto_z:.0f} mm (o plano medido mais alto; com a ponta para '
+                    f'baixo o braço chegaria até {campo.teto_alcance_z:.0f} mm). Em cada direção e '
+                    'altura, vale o menor entre o calculado e o medido: nunca passa do que você '
+                    'mediu.')
+        else:
+            topo = (f'Topo a {campo.teto_z:.0f} mm: acima disso o braço não chega com a ponta '
+                    'para baixo. Sem 2 planos medidos, não há campo medido para limitar.')
+        mesa = getattr(self, '_mesa_z', None)
+        mesa_txt = (f' Mesa (o tampo, em laranja) a {mesa:.1f} mm, pelo ponto "mesa": nenhuma '
+                    'peça do robô (nem a ferramenta) pode descer abaixo dela.'
+                    if mesa is not None else '')
+        self.campo_base_txt.setText(
+            f'Chão a {campo.chao_z:.1f} mm ({len(campo.pontos)} pontos da base). {topo}'
+            + mesa_txt + ' '
+            'Posição do flange (sem ferramenta), no referencial do robô.' + comparacao)
 
     def _ponto_selecionado(self):
         p = self._selecionado()
         if p is None:
-            self.robot_view.definir_alvo(None)
+            for v in self._vistas():
+                v.definir_alvo(None)
             self.ponto_txt.setText('Nenhum ponto selecionado.')
         else:
-            self.robot_view.definir_alvo(p['juntas'])
-            self.robot_view.definir_estado_alvo('ponto')
+            for v in self._vistas():
+                v.definir_alvo(p['juntas'])
+                v.definir_estado_alvo('ponto')
             self.ponto_txt.setText(f'{p["nome"]} ({NOME_TIPO[p["tipo"]]}): '
                                    + '  '.join(f'{n} {v:.1f}°'
                                                for n, v in zip(JOINT_NAMES, p['juntas'])))
@@ -364,8 +468,10 @@ class CampoTrabalho(Modulo):
             avisos.append(f'Movimento grande ({maior:.0f}° numa junta): confira se não há '
                           'ninguém nem nada perto do robô.')
         if not j.sim_mode and p['tipo'] == 'base':
-            avisos.append('Ponto da BASE: o flange chega no nível do tampo. O caminho até lá '
-                          'não é conferido: acompanhe com a mão perto da EMERGÊNCIA.')
+            avisos.append('Ponto da BASE: o flange chega no nível do tampo. O caminho é '
+                          'conferido pela segurança do campo de trabalho (só o flange e a '
+                          'ponta da ferramenta, não o braço inteiro): acompanhe com a mão '
+                          'perto da EMERGÊNCIA.')
         texto = (f'Levar o {robo} até "{p["nome"]}" ({NOME_TIPO[p["tipo"]]}).\n\n'
                  'De:  ' + ', '.join(f'{n} {v:.1f}°' for n, v in zip(JOINT_NAMES, de))
                  + '\nPara: ' + ', '.join(f'{n} {v:.1f}°' for n, v in zip(JOINT_NAMES, alvo))

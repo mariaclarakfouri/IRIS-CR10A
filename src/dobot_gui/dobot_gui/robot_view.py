@@ -15,12 +15,13 @@ import time
 from collections import deque
 
 import numpy as np
-from PyQt5.QtCore import QPointF, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QPainter, QPen
+from PyQt5.QtCore import QLineF, QPointF, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import (QColor, QFont, QPainter, QPainterPath, QPen, QPixmap, QPolygonF,
+                         QRadialGradient)
 from PyQt5.QtWidgets import QSizePolicy, QWidget
 
-from .campo import Campo
-from .robot3d_render import Camera, scene_triangles, shade_and_sort
+from .campo import Campo, CampoDaBase
+from .robot3d_render import Camera, scene_normais, scene_triangles, shade_and_sort
 from .robot3d_scene import UrdfSceneError, parse_urdf
 
 JOINT_NAMES = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
@@ -28,14 +29,17 @@ JOINT_NAMES = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
 # o sinal invertido entre o modelo e os ângulos que o robô Dobot reporta.
 DOBOT_TO_URDF_SIGN = [-1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 
-TRIANGLE_BUDGET = 7000
+TRIANGLE_BUDGET = 40000      # parado: malha detalhada (~17 mil triângulos; um quadro só)
 # Movimento liso: enquanto o robô se mexe, o desenho usa um modelo mais leve
-# (~1/2 dos triângulos, quase igual nesse tamanho) e a posição é interpolada
+# (bem menos triângulos, quase igual com o robô andando) e a posição é interpolada
 # entre as leituras, mostrada com um pequeno atraso para sempre haver uma leitura
 # depois do instante desenhado. Parado, volta ao modelo detalhado.
 TRIANGLE_BUDGET_LEVE = 2500
 QUADRO_MS = 16                # até ~60 quadros por segundo enquanto se move
 ATRASO_S = 0.06               # o desenho fica este tempo atrás da última leitura
+FIM_ZOOM_MS = 400             # zoom parado este tempo: volta ao modelo detalhado
+ZOOM_POR_DENTE = 0.88         # cada dente da roda: distância da câmera × isto
+ZOOM_SUAVE = 0.3              # a cada quadro anda esta fração do que falta (desliza)
 PARADO_S = 0.3                # sem mudar por este tempo: desenha o modelo detalhado
 CR10_REACH_M = 1.375
 # Campo de trabalho (aba Campo de Trabalho): faces translúcidas, arestas e pontos.
@@ -64,6 +68,12 @@ JUNTAS_CELULA = ('ft_flange_attach', 'load_cell_attach', 'coupler_tool_attach',
 _URDF_CELULA = None
 
 BACKGROUND = QColor('#0f172a')
+FUNDO_CENTRO = QColor('#1b2740')     # degradê do fundo: mais claro atrás do robô
+SOMBRA = QColor(2, 6, 16, 110)       # sombra do robô no chão
+MESA_FACE = QColor(217, 164, 101, 46)    # o tampo da mesa (translúcido)
+MESA_BORDA = QColor(217, 164, 101, 150)
+MESA_LADO_M = 1.6                        # o tampo desenhado vai até isto em volta do robô
+SOMBRA_BORDA = ((14, 14), (26, 7))   # bordas suaves: (largura px, opacidade)
 GRID_COLOR = QColor('#1e293b')
 REACH_COLOR = QColor('#334155')
 TEXT_COLOR = QColor('#94a3b8')
@@ -231,10 +241,19 @@ class RobotView(QWidget):
         # Leituras (instante, ângulos) para a interpolação e o modelo em uso.
         self._amostras = deque(maxlen=64)
         self._leve = False
+        self._camera_mexendo = False      # girando/movendo a câmera com o mouse
         self._ultima_mudanca = 0.0
         self._timer = QTimer(self)
         self._timer.setInterval(QUADRO_MS)
         self._timer.timeout.connect(self._quadro)
+        self._fim_zoom = QTimer(self)                # rodinha parada por um tempo
+        self._fim_zoom.setSingleShot(True)
+        self._fim_zoom.setInterval(FIM_ZOOM_MS)
+        self._fim_zoom.timeout.connect(self._soltar_camera)
+        self._dist_alvo = None                       # zoom deslizando até esta distância
+        self._anim_zoom = QTimer(self)
+        self._anim_zoom.setInterval(QUADRO_MS)
+        self._anim_zoom.timeout.connect(self._passo_zoom)
 
         self._cores_qt = {}               # cor (ARGB em um inteiro) -> QColor
         # Campo de trabalho: (campo.Campo, grade (n_z, n_ang, 3) em metros) ou None.
@@ -292,7 +311,7 @@ class RobotView(QWidget):
             self._rebuild()
             self.update()
         elif agora - self._ultima_mudanca > PARADO_S:
-            if self._leve:                 # parou: um quadro com o modelo detalhado
+            if self._leve and not self._camera_mexendo:   # parou: um quadro com o modelo detalhado
                 self._leve = False
                 self._rebuild()
                 self.update()
@@ -330,20 +349,66 @@ class RobotView(QWidget):
             self._rebuild()
             self.update()
 
-    def definir_campo(self, base_deg, teto_deg):
-        """Desenha o campo de trabalho CALCULADO (campo.Campo) a partir dos pontos
-        medidos (listas de 6 ângulos, convenção Dobot): chão e contorno pelos
-        pontos da base, teto pelos do teto e o alcance do braço em cada altura.
-        Menos de 3 pontos da base ou nenhum do teto apaga o desenho. Devolve o
-        Campo (ou None)."""
+    def definir_mesa(self, z_mm):
+        """Desenha o tampo da mesa na altura z (mm) (None tira). A sombra do robô
+        passa a cair nele."""
+        self._mesa_z = None if z_mm is None else float(z_mm) / 1000.0
+        if getattr(self, '_world_tris', None) is not None:
+            self._calcular_sombra()
+        self.update()
+
+    def _altura_sombra(self):
+        return self._mesa_z if getattr(self, '_mesa_z', None) is not None else GROUND_Z
+
+    def _draw_mesa(self, painter, w, h):
+        z = getattr(self, '_mesa_z', None)
+        if z is None:
+            return
+        a = MESA_LADO_M
+        canto = np.array([[-a, -a, z], [a, -a, z], [a, a, z], [-a, a, z]])
+        uv, d = self.camera.project(canto, w, h)
+        if np.any(d <= self.camera.near):
+            return
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(QPen(MESA_BORDA, 1.4))
+        painter.setBrush(MESA_FACE)
+        painter.drawPolygon(QPolygonF([QPointF(*p) for p in uv.tolist()]))
+
+    def flanges_mm(self, lista_deg):
+        """Posição do flange (mm, referencial do robô) para cada lista de 6
+        ângulos (convenção Dobot)."""
+        if self.scene is None:
+            return []
+        return [self.scene.link_transforms(dobot_deg_to_joint_values(q))['Link6'][:3, 3] * 1000.0
+                for q in lista_deg]
+
+    def definir_campo(self, contorno_deg, referencias_deg=(), so_base=False):
+        """Desenha o campo de trabalho CALCULADO a partir dos pontos medidos
+        (listas de 6 ângulos, convenção Dobot); `contorno_deg` dá a borda e
+        `referencias_deg` ("mesa", "começo …") só a altura.
+
+        so_base=False: campo.Campo, com todos os planos medidos (pelo menos 2).
+        so_base=True: campo.CampoDaBase, só com o plano mais baixo e a cinemática
+        do robô (paredes verticais do contorno da base, alcance com a ponta para
+        baixo), sem passar do campo medido (se houver 2 planos). Sem pontos suficientes, apaga o desenho. Devolve o campo (ou None)."""
         self._campo = None
-        if self.scene is not None and len(base_deg) >= 3 and len(teto_deg) >= 1:
-            def flanges(lista):
-                return [self.scene.link_transforms(dobot_deg_to_joint_values(q))
-                        ['Link6'][:3, 3] * 1000.0 for q in lista]
-            campo = Campo(flanges(base_deg), flanges(teto_deg))
-            g = campo.malha(n_ang=72, n_z=20) / 1000.0
-            self._campo = (campo, g)
+        if self.scene is not None and len(contorno_deg) >= 3:
+            flanges = self.flanges_mm
+            try:
+                if so_base:
+                    borda, refs = flanges(contorno_deg), flanges(referencias_deg)
+                    try:
+                        medido = Campo(borda, refs)      # o calculado não passa dele
+                    except ValueError:
+                        medido = None
+                    campo = CampoDaBase(borda, refs, limite=medido)
+                    g = campo.malha(n_ang=72, n_z=26)
+                else:
+                    campo = Campo(flanges(contorno_deg), flanges(referencias_deg))
+                    g = campo.malha(n_ang=72, por_vao=1)
+                self._campo = (campo, g / 1000.0)
+            except ValueError:
+                pass
         self.update()
         return self._campo[0] if self._campo else None
 
@@ -358,36 +423,43 @@ class RobotView(QWidget):
         uv, d = uv.reshape(nz, na, 2), d.reshape(nz, na)
         painter.setRenderHint(QPainter.Antialiasing, True)
         if parte == 'faces':
+            # Todas as faces têm a mesma cor translúcida: a ordem não muda o
+            # resultado, então pinta direto, sem ordenar. Sem suavização (as
+            # linhas do campo cobrem as bordas): bem mais rápido ao girar.
+            painter.setRenderHint(QPainter.Antialiasing, False)
             painter.setPen(Qt.NoPen)
-            polis = []
-            for i in range(nz - 1):
-                for j in range(na):
-                    k = (j + 1) % na
-                    dd = (d[i, j], d[i, k], d[i + 1, k], d[i + 1, j])
-                    if min(dd) > cam.near:
-                        polis.append((sum(dd) / 4, (uv[i, j], uv[i, k], uv[i + 1, k],
-                                                    uv[i + 1, j]), CAMPO_FACE))
-            for fila, cor in ((0, CAMPO_CHAO), (nz - 1, CAMPO_CHAO)):   # chão e teto
+            painter.setBrush(CAMPO_FACE)
+            j1 = (np.arange(na) + 1) % na
+            q = np.stack([uv[:-1], uv[:-1][:, j1], uv[1:][:, j1], uv[1:]], axis=2)
+            qd = np.stack([d[:-1], d[:-1][:, j1], d[1:][:, j1], d[1:]], axis=2)
+            ok = (qd.reshape(-1, 4) > cam.near).all(axis=1)
+            poligono, ponto, faces = painter.drawPolygon, QPointF, QPolygonF
+            for quad in q.reshape(-1, 4, 2)[ok].tolist():
+                poligono(faces([ponto(*c) for c in quad]))
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setBrush(CAMPO_CHAO)
+            for fila in (0, nz - 1):                      # chão e topo
                 if np.all(d[fila] > cam.near):
-                    polis.append((float(d[fila].mean()), tuple(uv[fila]), cor))
-            for _d, pts, cor in sorted(polis, key=lambda x: -x[0]):    # longe primeiro
-                painter.setBrush(cor)
-                painter.drawPolygon(*[QPointF(float(p[0]), float(p[1])) for p in pts])
+                    poligono(faces([ponto(*c) for c in uv[fila].tolist()]))
             return
-        # Linhas: anéis em algumas alturas e meridianos a cada 30°.
-        painter.setPen(QPen(CAMPO_ARESTA, 1.2))
-        for i in sorted({0, nz // 3, 2 * nz // 3, nz - 1}):
+        # Linhas: um anel em cada plano medido e meridianos a cada 30° (numa chamada só).
+        linhas = []
+        for i in campo.filas_planos:
             for j in range(na):
                 k = (j + 1) % na
                 if d[i, j] > cam.near and d[i, k] > cam.near:
-                    painter.drawLine(QPointF(*uv[i, j]), QPointF(*uv[i, k]))
+                    linhas.append(QLineF(*uv[i, j], *uv[i, k]))
         for j in range(0, na, max(1, na // 12)):
             for i in range(nz - 1):
                 if d[i, j] > cam.near and d[i + 1, j] > cam.near:
-                    painter.drawLine(QPointF(*uv[i, j]), QPointF(*uv[i + 1, j]))
-        # Os pontos medidos.
+                    linhas.append(QLineF(*uv[i, j], *uv[i + 1, j]))
+        painter.setPen(QPen(CAMPO_ARESTA, 1.2))
+        painter.drawLines(linhas)
+        # Os pontos medidos: borda dos planos e referências de altura.
         painter.setPen(Qt.NoPen)
-        for pts, cor in ((campo.base, CAMPO_PONTO_BASE), (campo.teto, CAMPO_PONTO_TETO)):
+        for pts, cor in ((campo.pontos, CAMPO_PONTO_BASE), (campo.referencias, CAMPO_PONTO_TETO)):
+            if not len(pts):
+                continue
             puv, pd = cam.project(np.asarray(pts) / 1000.0, w, h)
             painter.setBrush(cor)
             for p, dd in zip(puv.tolist(), pd.tolist()):
@@ -406,10 +478,13 @@ class RobotView(QWidget):
         self._cena = cena
         transforms = cena.link_transforms(dobot_deg_to_joint_values(self.q_deg))
         self._world_tris, self._colors = scene_triangles(cena, transforms)
+        self._world_normais = scene_normais(cena, transforms)
+        self._calcular_sombra()
         self._alvo_tris = self._alvo_cores = self._alvo_igual = None
         if self.alvo_deg is not None:
             t_alvo = cena.link_transforms(dobot_deg_to_joint_values(self.alvo_deg))
             self._alvo_tris, cores = scene_triangles(cena, t_alvo)
+            self._alvo_normais = scene_normais(cena, t_alvo)
             # Peças do alvo no mesmo lugar que as do robô: não são desenhadas (os
             # dois desenhos se misturariam), mas continuam valendo para o clique.
             igual = np.array([np.allclose(transforms.get(link, np.eye(4)),
@@ -421,10 +496,41 @@ class RobotView(QWidget):
 
     # --- desenho ---
 
+    def update(self):
+        """Pede um quadro NOVO (algo mudou). Os repintes que o Qt pede sozinho
+        (rolar a página, outra janela por cima) só colam o último quadro."""
+        self._sujo = True
+        super().update()
+
+    def resizeEvent(self, evento):
+        self._sujo = True
+        super().resizeEvent(evento)
+
     def paintEvent(self, _event):
+        # Rolar a página faz o Qt pedir o desenho a cada passo: se nada mudou
+        # (nem a câmera), cola o quadro guardado em vez de desenhar tudo de novo.
+        cam = self.camera
+        chave = (cam.az, cam.el, cam.dist, *np.asarray(cam.target).tolist())
+        dpr = self.devicePixelRatioF()
+        tamanho = (round(self.width() * dpr), round(self.height() * dpr))
+        quadro = getattr(self, '_quadro_guardado', None)
+        if (getattr(self, '_sujo', True) or quadro is None or chave != self._chave_quadro
+                or (quadro.width(), quadro.height()) != tamanho):
+            quadro = QPixmap(*tamanho)
+            quadro.setDevicePixelRatio(dpr)
+            p = QPainter(quadro)
+            self._desenhar(p)
+            p.end()
+            self._quadro_guardado, self._chave_quadro, self._sujo = quadro, chave, False
         painter = QPainter(self)
-        painter.fillRect(self.rect(), BACKGROUND)
+        painter.drawPixmap(0, 0, quadro)
+
+    def _desenhar(self, painter):
         w, h = self.width(), self.height()
+        fundo = QRadialGradient(w * 0.5, h * 0.42, max(w, h) * 0.75)
+        fundo.setColorAt(0.0, FUNDO_CENTRO)
+        fundo.setColorAt(1.0, BACKGROUND)
+        painter.fillRect(self.rect(), fundo)
 
         if self._error:
             painter.setPen(TEXT_COLOR)
@@ -433,6 +539,8 @@ class RobotView(QWidget):
             return
 
         self._draw_ground(painter, w, h)
+        self._draw_mesa(painter, w, h)
+        self._draw_sombra(painter, w, h)
         self._draw_campo(painter, w, h, 'faces')
         self._draw_robot(painter, w, h)
         self._draw_campo(painter, w, h, 'linhas')
@@ -468,20 +576,68 @@ class RobotView(QWidget):
             if depth[i] > cam.near and depth[i + 1] > cam.near:
                 painter.drawLine(QPointF(*uv[i]), QPointF(*uv[i + 1]))
 
+    def _calcular_sombra(self):
+        """Sombra do robô no chão (luz de cima): o contorno de cada peça vista de
+        cima (envoltória convexa), na altura do chão. Calculada uma vez por pose."""
+        self._sombra = []
+        tris = self._world_tris
+        if tris is None or not len(tris):
+            return
+        try:
+            from scipy.spatial import ConvexHull
+        except ImportError:
+            return
+        pecas = self._cena.flat_part
+        for i in np.unique(pecas):
+            xy = tris[pecas == i].reshape(-1, 3)[::3, :2]
+            if len(xy) < 3:
+                continue
+            try:
+                casca = xy[ConvexHull(xy).vertices]
+            except Exception:
+                continue
+            self._sombra.append(np.c_[casca, np.full(len(casca), self._altura_sombra())])
+
+    def _draw_sombra(self, painter, w, h):
+        if not getattr(self, '_sombra', None):
+            return
+        cam = self.camera
+        caminho = QPainterPath()
+        caminho.setFillRule(Qt.WindingFill)      # peças sobrepostas: uma sombra só
+        for poli in self._sombra:
+            uv, d = cam.project(poli, w, h)
+            if np.any(d <= cam.near):
+                continue
+            caminho.moveTo(*uv[0])
+            for p in uv[1:]:
+                caminho.lineTo(*p)
+            caminho.closeSubpath()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        if self._leve:                           # mexendo: só a sombra, sem a borda suave
+            painter.fillPath(caminho, SOMBRA)
+            return
+        caminho = caminho.simplified()           # junta as peças num contorno só
+        for largura, alfa in SOMBRA_BORDA:       # borda esfumaçada por fora
+            painter.strokePath(caminho, QPen(QColor(SOMBRA.red(), SOMBRA.green(), SOMBRA.blue(),
+                                                    alfa), largura, Qt.SolidLine, Qt.RoundCap,
+                                             Qt.RoundJoin))
+        painter.fillPath(caminho, SOMBRA)
+
     def _draw_robot(self, painter, w, h):
         self._desenho = None
         if self._world_tris is None or self._world_tris.shape[0] == 0:
             return
         painter.setRenderHint(QPainter.Antialiasing, False)
         painter.setPen(Qt.NoPen)
-        uv, rgb = shade_and_sort(self._world_tris, self._colors, self.camera, w, h)
+        uv, rgb = shade_and_sort(self._world_tris, self._colors, self.camera, w, h,
+                                 normais_cantos=self._world_normais)
         self._pintar(painter, uv, _cores_rgba(rgb))
         if self._alvo_tris is None:
             return
         # O alvo vem numa camada por cima (translúcido, como em programas de CAD):
         # ordenado junto com o robô, os dois desenhos se misturariam onde encostam.
         uv, rgb, idx = shade_and_sort(self._alvo_tris, self._alvo_cores, self.camera, w, h,
-                                      com_indices=True)
+                                      com_indices=True, normais_cantos=self._alvo_normais)
         pecas = self._cena.flat_part[idx]
         # Dono de cada triângulo: a junta que move a peça (-1 = base, não mexe).
         junta_da_peca = np.array([JUNTA_DA_PECA.get(n, -1) for n in self._cena.part_links],
@@ -556,6 +712,14 @@ class RobotView(QWidget):
         if self._junta_escolhida is not None:
             self._junta_escolhida = None
             self.update()
+        self._soltar_camera()
+
+    def _camera_leve(self):
+        """Girando/movendo a câmera: modelo leve (quadros rápidos) até soltar."""
+        self._camera_mexendo = True
+        if not self._leve and self._cena_leve is not None:
+            self._leve = True
+            self._rebuild()
 
     def mouseMoveEvent(self, event):
         if self._last_mouse is None or self._drag_button is None:
@@ -567,6 +731,7 @@ class RobotView(QWidget):
             # Gira só o ALVO (nada vai para o robô daqui).
             fino = bool(event.modifiers() & Qt.ShiftModifier)
             j = self._junta_escolhida
+            self._camera_leve()                      # arrastando o alvo: modelo leve
             novo = self.alvo_deg[j] + dx * (GRAUS_POR_PX_FINO if fino else GRAUS_POR_PX)
             novo = round(min(self._limites[1], max(self._limites[0], novo)), 1)
             if novo != self.alvo_deg[j]:
@@ -574,11 +739,48 @@ class RobotView(QWidget):
                 self._rebuild()
                 self.ao_mudar_alvo.emit(list(self.alvo_deg))
         elif self._drag_button == Qt.LeftButton:
+            self._camera_leve()
             self.camera.orbit(-dx * 0.008, dy * 0.008)
         else:
+            self._camera_leve()
             self.camera.pan(dx, dy, self.height())
         self.update()
 
     def wheelEvent(self, event):
-        self.camera.zoom(0.9 if event.angleDelta().y() > 0 else 1.1)
+        """Rodinha em cima do 3D: zoom. O evento fica aqui (aceito), senão o Qt o
+        passa para a página e ela rola junto."""
+        passos = event.angleDelta().y() / 120.0      # touchpad manda passos menores
+        if passos:
+            self._camera_leve()                      # rolando: modelo leve
+            # Cada dente da roda marca até onde ir; a câmera desliza até lá
+            # (_passo_zoom), em vez de pular de uma vez.
+            cam = self.camera
+            base = self._dist_alvo if self._dist_alvo is not None else cam.dist
+            self._dist_alvo = max(cam.DIST_MIN, min(cam.DIST_MAX, base * ZOOM_POR_DENTE ** passos))
+            self._fim_zoom.stop()
+            if not self._anim_zoom.isActive():
+                self._anim_zoom.start()
+        event.accept()
+
+    def _passo_zoom(self):
+        cam, alvo = self.camera, self._dist_alvo
+        if alvo is None:
+            self._anim_zoom.stop()
+            return
+        cam.dist += (alvo - cam.dist) * ZOOM_SUAVE
+        if abs(alvo - cam.dist) < alvo * 0.002:
+            cam.dist = alvo
+            self._dist_alvo = None
+            self._anim_zoom.stop()
+            self._fim_zoom.start()                   # sem rolar mais: volta ao detalhado
         self.update()
+
+    def _soltar_camera(self):
+        """A câmera parou (soltou o mouse ou parou de rolar): modelo detalhado."""
+        if self._drag_button is not None or self._anim_zoom.isActive():
+            return                                   # ainda segurando o mouse / no zoom
+        self._camera_mexendo = False
+        if self._leve and not self._timer.isActive():
+            self._leve = False
+            self._rebuild()
+            self.update()

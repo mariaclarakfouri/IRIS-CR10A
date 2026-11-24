@@ -4,8 +4,12 @@ Fala com o controlador do robô pela porta do dashboard (29999, TCP): conectar,
 habilitar, velocidade, ler a posição, mover as juntas (MovJ), parar e
 emergência. No modo simulação os mesmos comandos vão para o gêmeo virtual.
 
-Ainda NÃO há verificação de segurança do caminho: ela é a próxima etapa do
-projeto e entra em `_verificar_movimento`, por onde todo movimento passa.
+Segurança: todo movimento passa por `_verificar_movimento` antes de ir para o
+robô. Ali o caminho inteiro do MovJ (da posição atual até o destino) é conferido
+contra o campo de trabalho calculado (dobot_gui.seguranca): se o flange ou a
+ponta da ferramenta sairiam do campo, ou qualquer peça do robô desceria abaixo
+do tampo da mesa, em algum momento, o movimento é recusado e nada é enviado ao
+robô. O modo arrastar (mover com a mão) não passa por aqui.
 """
 import signal
 import socket
@@ -19,6 +23,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from std_srvs.srv import SetBool, Trigger
 
+from dobot_gui.seguranca import COMPRIMENTO_CELULA_MM, VerificadorCampo
 from dobot_interfaces.action import MoveJoint
 from dobot_interfaces.srv import GetJoints, JogJoint, SetSpeed
 
@@ -59,6 +64,29 @@ class DobotActionServer(Node):
         # MovJ: o SpeedFactor é global e pode ser trocado por fora (tablet,
         # DobotStudio, religar o robô) sem o servidor ficar sabendo.
         self._velocidade_pct = None
+
+        # Segurança: o campo de trabalho calculado (pontos da aba Campo de
+        # Trabalho). Com a célula de carga na ponta, a ponta dela também é
+        # conferida. Sem o verificador, nenhum movimento é aceito.
+        self.declare_parameter('ponta', 'nada')
+        ponta = str(self.get_parameter('ponta').value).strip().lower()
+        ferramenta_mm = COMPRIMENTO_CELULA_MM if ponta == 'celula' else 0.0
+        self._seguranca = None
+        self._erro_seguranca = ''
+        try:
+            self._seguranca = VerificadorCampo(ferramenta_mm=ferramenta_mm)
+            campo, erro = self._seguranca.campo()
+            if campo is None:
+                self.get_logger().warn(f'Segurança: {erro}. Movimentos serão recusados.')
+            else:
+                self.get_logger().info(
+                    f'Segurança: campo de trabalho calculado carregado (chão '
+                    f'{campo.chao_z:.0f} mm, topo {campo.teto_z:.0f} mm, mesa '
+                    f'{self._seguranca.mesa_z:.1f} mm; ferramenta {ferramenta_mm:.1f} mm).')
+        except Exception as e:     # sem o verificador, nada se move
+            self._erro_seguranca = str(e) or e.__class__.__name__
+            self.get_logger().error(f'Segurança: verificador não carregou ({self._erro_seguranca}).'
+                                    ' Movimentos serão recusados.')
 
         self.dashboard = None
         self.emergency_stop_flag = False
@@ -113,12 +141,39 @@ class DobotActionServer(Node):
     def _verificar_movimento(self, alvo):
         """Ponto único por onde todo movimento passa antes de ser enviado.
 
-        Aqui entra o protocolo de segurança do IRIS (limites de cada junta e
-        espaço de trabalho medidos no laboratório). Enquanto ele não existe,
-        só o modo arrastar bloqueia. Devolve (ok, motivo)."""
+        Recusa: modo arrastar ligado, ou o caminho do MovJ (da partida até o
+        `alvo`) saindo do campo de trabalho calculado em qualquer momento.
+        Devolve (ok, motivo)."""
         if self._arrastando:
             return False, self._bloqueio_arrastar()
-        return True, ''
+        if self._seguranca is None:
+            return False, ('NÃO É SEGURO: o verificador do campo de trabalho não carregou '
+                           f'({self._erro_seguranca}). Movimento recusado.')
+        inicio = self._partida_do_movimento()
+        if inicio is None:
+            return False, ('Não deu para ler a posição atual do robô, e sem ela não dá para '
+                           'conferir se o caminho é seguro. Movimento recusado.')
+        try:
+            ok, motivo = self._seguranca.verificar(inicio, alvo)
+        except Exception as e:
+            ok, motivo = False, f'NÃO É SEGURO: erro ao conferir o caminho ({e}). Recusado.'
+        if not ok:
+            self.get_logger().warn(f'Movimento recusado para {alvo}: {motivo}')
+        return ok, motivo
+
+    def _partida_do_movimento(self):
+        """De onde o próximo MovJ começa: a posição atual ou, se o robô ainda
+        está indo para o destino anterior (o MovJ novo entra na FILA do Dobot),
+        esse destino. None se não der para ler a posição."""
+        atual = self._read_angles()
+        if atual is None:
+            return None
+        ultimo = self._ultimo_alvo
+        if ultimo is not None and \
+                max(self._angle_diff(a, u) for a, u in zip(atual, ultimo)) > TOLERANCIA_GRAUS \
+                and not self._robo_parado():
+            return list(ultimo)
+        return atual
 
     # --- modo arrastar (mover o robô com a mão) ---
 

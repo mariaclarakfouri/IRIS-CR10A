@@ -832,6 +832,8 @@ class JanelaPrincipal(QWidget):
         elif self._parada_normal():
             self.log(f'Ação parada pelo usuário ({msg}).')
             self.alerta.mostrar('Movimento parado. Robô conectado e pronto.', 'aviso')
+        elif self.avisar_inseguro(msg):
+            pass
         else:
             self.log(f'Erro: {msg}', 'ERRO')
             self.alerta.mostrar(f'Erro: {msg}', 'erro')
@@ -840,6 +842,17 @@ class JanelaPrincipal(QWidget):
         self._set_joint_controls_enabled(True)
         self.speed_slider.setEnabled(True)
         self._set_robot_state('connected')
+
+    def avisar_inseguro(self, msg):
+        """Recusa do servidor por SEGURANÇA (o caminho sairia do campo de
+        trabalho): aviso vermelho, registro e uma janela no meio da tela, para
+        não passar despercebida. Devolve True se era esse tipo de recusa."""
+        if 'NÃO É SEGURO' not in (msg or ''):
+            return False
+        self.log(msg, 'AVISO')
+        self.alerta.mostrar(msg, 'erro')
+        QMessageBox.warning(self, 'Esse ponto não é seguro', msg)
+        return True
 
     def _on_progresso(self, dados):
         self.atividade.atualizar(dados)
