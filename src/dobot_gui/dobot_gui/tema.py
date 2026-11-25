@@ -466,6 +466,9 @@ def make_icon(kind, color='#ffffff', size=16):
     elif kind == 'shield':
         painter.drawPolygon(poly((8, 1.8), (13.5, 4), (13, 9), (8, 14.2), (3, 9), (2.5, 4)))
         painter.drawPolyline(poly((5.5, 8), (7.4, 10), (10.8, 6.2)))
+    elif kind == 'corte':     # Campo do Experimento: cantos de recorte
+        painter.drawPolyline(poly((4.5, 1.5), (4.5, 11.5), (14.5, 11.5)))
+        painter.drawPolyline(poly((1.5, 4.5), (11.5, 4.5), (11.5, 14.5)))
     elif kind == 'tool':      # Ferramentas: chave de boca
         linha(3, 13, 9.2, 6.8)
         painter.drawArc(QRectF(7.5, 2, 7, 7), -135 * 16, 270 * 16)

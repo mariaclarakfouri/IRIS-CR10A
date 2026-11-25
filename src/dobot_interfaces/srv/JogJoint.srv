@@ -1,5 +1,9 @@
 # Manda o robô ir pras juntas pedidas SEM esperar o movimento terminar (movimento manual em tempo real)
 float64[6] joints
+# Experimento de onde veio o pedido (ex.: "controle_juntas"): se ele tiver um
+# corte do campo de trabalho salvo, o movimento também precisa ficar dentro dele.
+# Vazio = só o campo de trabalho geral.
+string experimento
 ---
 bool success
 string message

@@ -71,6 +71,8 @@ BACKGROUND = QColor('#0f172a')
 FUNDO_CENTRO = QColor('#1b2740')     # degradê do fundo: mais claro atrás do robô
 SOMBRA = QColor(2, 6, 16, 110)       # sombra do robô no chão
 MESA_FACE = QColor(217, 164, 101, 46)    # o tampo da mesa (translúcido)
+CORTE_FACE = QColor(249, 115, 22, 40)    # corte do campo de um experimento
+CORTE_ARESTA = QColor(251, 146, 60, 235)
 MESA_BORDA = QColor(217, 164, 101, 150)
 MESA_LADO_M = 1.6                        # o tampo desenhado vai até isto em volta do robô
 SOMBRA_BORDA = ((14, 14), (26, 7))   # bordas suaves: (largura px, opacidade)
@@ -374,6 +376,52 @@ class RobotView(QWidget):
         painter.setBrush(MESA_FACE)
         painter.drawPolygon(QPolygonF([QPointF(*p) for p in uv.tolist()]))
 
+    def definir_corte(self, poligono_mm=None, z_min_mm=0.0, z_max_mm=0.0):
+        """Desenha o corte do campo de um experimento: o polígono (visto de cima,
+        mm) subindo de z_min a z_max, em laranja. None tira."""
+        if poligono_mm is None or len(poligono_mm) < 2:
+            self._corte = None
+        else:
+            p = np.asarray(poligono_mm, float) / 1000.0
+            self._corte = (p, float(z_min_mm) / 1000.0, float(z_max_mm) / 1000.0)
+        self.update()
+
+    def _draw_corte(self, painter, w, h, parte):
+        corte = getattr(self, '_corte', None)
+        if corte is None:
+            return
+        p, z0, z1 = corte
+        n = len(p)
+        baixo = np.c_[p, np.full(n, z0)]
+        cima = np.c_[p, np.full(n, z1)]
+        cam = self.camera
+        ub, db = cam.project(baixo, w, h)
+        uc, dc = cam.project(cima, w, h)
+        if np.any(db <= cam.near) or np.any(dc <= cam.near):
+            return
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        fechado = n >= 3
+        if parte == 'faces':
+            if not fechado:
+                return
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(CORTE_FACE)
+            for i in range(n):
+                k = (i + 1) % n
+                painter.drawPolygon(QPolygonF([QPointF(*ub[i]), QPointF(*ub[k]),
+                                               QPointF(*uc[k]), QPointF(*uc[i])]))
+            painter.drawPolygon(QPolygonF([QPointF(*q) for q in uc.tolist()]))
+            return
+        painter.setPen(QPen(CORTE_ARESTA, 2.0))
+        lados = range(n) if fechado else range(n - 1)
+        linhas = []
+        for i in lados:
+            k = (i + 1) % n
+            linhas += [QLineF(*ub[i], *ub[k]), QLineF(*uc[i], *uc[k])]
+        for i in range(n):
+            linhas.append(QLineF(*ub[i], *uc[i]))
+        painter.drawLines(linhas)
+
     def flanges_mm(self, lista_deg):
         """Posição do flange (mm, referencial do robô) para cada lista de 6
         ângulos (convenção Dobot)."""
@@ -542,8 +590,10 @@ class RobotView(QWidget):
         self._draw_mesa(painter, w, h)
         self._draw_sombra(painter, w, h)
         self._draw_campo(painter, w, h, 'faces')
+        self._draw_corte(painter, w, h, 'faces')
         self._draw_robot(painter, w, h)
         self._draw_campo(painter, w, h, 'linhas')
+        self._draw_corte(painter, w, h, 'linhas')
         self._draw_hud(painter, w, h)
 
     def _draw_ground(self, painter, w, h):

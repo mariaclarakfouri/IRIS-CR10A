@@ -139,11 +139,12 @@ class DobotActionServer(Node):
 
         self.get_logger().info('dobot_action_server pronto. Aguardando chamada em /connect.')
 
-    def _verificar_movimento(self, alvo):
+    def _verificar_movimento(self, alvo, experimento=''):
         """Ponto único por onde todo movimento passa antes de ser enviado.
 
         Recusa: drag mode ligado, ou o caminho do MovJ (da partida até o
-        `alvo`) saindo do campo de trabalho calculado em qualquer momento.
+        `alvo`) saindo do campo de trabalho calculado em qualquer momento (ou do
+        corte do `experimento`, se ele tiver um salvo na aba Campo do Experimento).
         Devolve (ok, motivo)."""
         bloqueio = self._bloqueio_arrastar()
         if bloqueio:
@@ -156,7 +157,7 @@ class DobotActionServer(Node):
             return False, ('Não deu para ler a posição atual do robô, e sem ela não dá para '
                            'conferir se o caminho é seguro. Movimento recusado.')
         try:
-            ok, motivo = self._seguranca.verificar(inicio, alvo)
+            ok, motivo = self._seguranca.verificar(inicio, alvo, experimento)
         except Exception as e:
             ok, motivo = False, f'NÃO É SEGURO: erro ao conferir o caminho ({e}). Recusado.'
         if not ok:
@@ -660,7 +661,7 @@ class DobotActionServer(Node):
             return response
 
         alvo = [float(j) for j in request.joints]
-        ok, motivo = self._verificar_movimento(alvo)
+        ok, motivo = self._verificar_movimento(alvo, str(request.experimento or ''))
         if not ok:
             response.success = False
             response.message = motivo
@@ -706,7 +707,8 @@ class DobotActionServer(Node):
         joints = [float(j) for j in goal_handle.request.joints]
 
         feedback_msg = MoveJoint.Feedback()
-        ok, motivo = self._verificar_movimento(joints)
+        ok, motivo = self._verificar_movimento(
+            joints, str(goal_handle.request.experimento or ''))
         if not ok:
             result.success = False
             result.message = motivo

@@ -896,11 +896,12 @@ class JanelaPrincipal(QWidget):
         """time.sleep que acorda na hora se pedirem para parar."""
         self._parar_evento.wait(segundos)
 
-    def mover_e_esperar(self, joints, ao_status=None):
+    def mover_e_esperar(self, joints, ao_status=None, experimento=''):
         """Chama a action move_joint e bloqueia (na thread de fundo) até o
         resultado. Todo movimento passa pelo ponto de verificação do servidor
         (onde entrará o protocolo de segurança). `ao_status(texto)` recebe cada
-        aviso de andamento do servidor ("Movendo...")."""
+        aviso de andamento do servidor ("Movendo..."). Com `experimento`, o
+        movimento também precisa ficar dentro do corte do campo desse experimento."""
         if self.parado():
             return False, 'Movimento parado pelo usuário.'
         done_event = threading.Event()
@@ -917,7 +918,7 @@ class JanelaPrincipal(QWidget):
             outcome['msg'] = msg
             done_event.set()
 
-        self.ros_node.call_move_joint(list(joints), on_feedback, on_done)
+        self.ros_node.call_move_joint(list(joints), on_feedback, on_done, experimento)
         done_event.wait()
         return outcome['ok'], outcome['msg']
 

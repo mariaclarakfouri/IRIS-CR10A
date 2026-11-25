@@ -1,5 +1,7 @@
 # Goal: ângulos alvo das 6 juntas, em graus (J1..J6)
 float64[6] joints
+# Experimento de onde veio o pedido (vazio = só o campo de trabalho geral).
+string experimento
 ---
 # Result
 bool success

@@ -8,6 +8,8 @@ from PyQt5.QtGui import QRegExpValidator
 from PyQt5.QtWidgets import QGridLayout, QHBoxLayout, QLineEdit, QPushButton
 
 from ..constantes import HOME_JOINTS, JOINT_MAX, JOINT_MIN, JOINT_NAMES
+from ..seguranca import NOME_EXPERIMENTO, ler_cortes
+from ..tema import COR
 from ..widgets import Cartao, JointSpinBox, barra_e_campo, com_icone, rotulo
 from .base import Modulo
 from .campo_trabalho import VELOCIDADE_MAX_PONTO
@@ -17,6 +19,9 @@ from .campo_trabalho import VELOCIDADE_MAX_PONTO
 LIMITES_POSICAO = [(-360.0, 360.0), (-360.0, 360.0), (-160.0, 160.0),
                    (-360.0, 360.0), (-360.0, 360.0), (-360.0, 360.0)]
 MOVIMENTO_GRANDE_GRAUS = 90
+# Os movimentos desta aba levam o nome do experimento: se houver um corte do
+# campo salvo para ele (aba Campo do Experimento), o servidor confere também.
+EXPERIMENTO = 'controle_juntas'
 
 
 class ControleJuntas(Modulo):
@@ -62,6 +67,10 @@ class ControleJuntas(Modulo):
             self.joint_sliders.append(slider)
             self.joint_spinboxes.append(spin)
         juntas.corpo.addLayout(grade)
+        self.corte_txt = rotulo('', 'cartaoTexto')
+        self.corte_txt.setWordWrap(True)
+        juntas.corpo.addWidget(self.corte_txt)
+        self.atualizar_corte()
         self.layout_modulo.addWidget(juntas)
         self.layout_modulo.addWidget(self._cartao_posicao())
 
@@ -74,6 +83,19 @@ class ControleJuntas(Modulo):
         self._jog_busy = False
         self._jog_pending = False
         self._last_jog_time = 0.0
+
+    def atualizar_corte(self):
+        """Mostra se este experimento usa um corte do campo (aba Campo do Experimento)."""
+        corte = ler_cortes().get(EXPERIMENTO)
+        if corte:
+            self.corte_txt.setText(
+                'Campo deste experimento: CORTADO (aba Campo do Experimento). Os movimentos '
+                f'daqui só vão dentro do corte, de {float(corte["z_min_mm"]):.0f} a '
+                f'{float(corte["z_max_mm"]):.0f} mm de altura.')
+            self.corte_txt.setStyleSheet(f'color: {COR["aviso_texto"]};')
+        else:
+            self.corte_txt.setText('Campo deste experimento: o campo de trabalho geral.')
+            self.corte_txt.setStyleSheet(f'color: {COR["texto_fraco"]};')
 
     def _cartao_posicao(self):
         c = Cartao(
@@ -174,7 +196,7 @@ class ControleJuntas(Modulo):
         j = self.janela
         ok, msg = False, 'Movimento não concluído.'
         try:
-            ok, msg = j.mover_e_esperar(alvo)
+            ok, msg = j.mover_e_esperar(alvo, experimento=EXPERIMENTO)
         finally:
             j.terminar_acao(ok, 'Robô na posição escrita.' if ok else msg)
 
@@ -236,7 +258,7 @@ class ControleJuntas(Modulo):
         joints = [spin.value() for spin in self.joint_spinboxes]
         threading.Thread(
             target=self.janela.ros_node.call_jog,
-            args=(joints, lambda ok, msg: self.jog_result.emit(ok, msg)),
+            args=(joints, lambda ok, msg: self.jog_result.emit(ok, msg), EXPERIMENTO),
             daemon=True,
         ).start()
 

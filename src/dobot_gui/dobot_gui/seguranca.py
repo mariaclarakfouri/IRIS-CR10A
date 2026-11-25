@@ -36,6 +36,7 @@ ferramenta (ele foi medido com o flange); os obstáculos, com o robô inteiro.
 Sem Qt: usado pelo servidor de movimento (dobot_control).
 """
 import csv
+import json
 import math
 import os
 import threading
@@ -48,6 +49,14 @@ from .constantes import SETTINGS_PATH
 from .robot3d_scene import parse_urdf
 
 PONTOS_PATH = os.path.join(os.path.dirname(SETTINGS_PATH), 'pontos_campo.csv')
+# Cortes do campo de trabalho por experimento (aba Campo do Experimento): cada
+# experimento pode usar só uma parte do campo geral. O campo geral não muda.
+CORTES_PATH = os.path.join(os.path.dirname(SETTINGS_PATH), 'campos_experimentos.json')
+# Experimentos que podem ter um corte: (chave enviada pela aba, nome mostrado).
+EXPERIMENTOS = (
+    ('controle_juntas', 'Controle das Juntas'),
+)
+NOME_EXPERIMENTO = dict(EXPERIMENTOS)
 PASSO_GRAUS = 0.5          # o caminho é conferido a cada passo deste tamanho (por junta)
 TOLERANCIA_MM = 1.0        # arredondamento: até isto além da borda ainda conta como dentro
 COMPRIMENTO_CELULA_MM = 67.7   # célula de carga FA7155 (valor com a ponteira, por folga)
@@ -213,13 +222,17 @@ def ler_pontos(caminho=PONTOS_PATH):
 class VerificadorCampo:
     """Confere movimentos contra o campo calculado. Seguro para várias threads."""
 
-    def __init__(self, ferramenta_mm=0.0, arquivo=PONTOS_PATH, urdf=None):
+    def __init__(self, ferramenta_mm=0.0, arquivo=PONTOS_PATH, urdf=None,
+                 arquivo_cortes=CORTES_PATH):
         self.ferramenta_mm = max(0.0, float(ferramenta_mm))
         self.arquivo = arquivo
+        self.arquivo_cortes = arquivo_cortes
         self.fk = ModeloRobo(urdf) if urdf else modelo_robo()
         self._trava = threading.Lock()
         self._marca = None          # (mtime, tamanho) do arquivo do campo em uso
         self._campo = None
+        self._marca_cortes = None   # (mtime, tamanho) do arquivo de cortes em uso
+        self._cortes = {}
         self.mesa_z = None          # altura do tampo (mm), pelo ponto "mesa"
         self._erro = 'campo de trabalho ainda não montado'
 
@@ -244,6 +257,20 @@ class VerificadorCampo:
                     self._erro = f'não deu para montar o campo de trabalho ({e})'
             return self._campo, self._erro
 
+    def cortes(self):
+        """{experimento: corte} salvos (lidos de novo se o arquivo mudou)."""
+        with self._trava:
+            try:
+                st = os.stat(self.arquivo_cortes)
+                marca = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                self._cortes, self._marca_cortes = {}, None
+                return {}
+            if marca != self._marca_cortes:
+                self._marca_cortes = marca
+                self._cortes = ler_cortes(self.arquivo_cortes)
+            return dict(self._cortes)
+
     def _montar(self):
         pontos = ler_pontos(self.arquivo)
         borda = [q for nome, q in pontos if not eh_referencia(nome)]
@@ -266,8 +293,10 @@ class VerificadorCampo:
         t = np.linspace(0.0, 1.0, n)[:, None]
         return a + (b - a) * t
 
-    def verificar(self, inicio, alvo):
-        """(ok, motivo). `inicio` e `alvo`: 6 ângulos (graus, convenção Dobot)."""
+    def verificar(self, inicio, alvo, experimento=''):
+        """(ok, motivo). `inicio` e `alvo`: 6 ângulos (graus, convenção Dobot).
+        Com `experimento` (ex.: 'controle_juntas') que tenha um corte salvo, a ponta
+        também precisa ficar dentro do corte desse experimento."""
         campo, erro = self.campo()
         if campo is None:
             return False, (f'NÃO É SEGURO: {erro}. Sem o campo de trabalho não dá para '
@@ -300,6 +329,15 @@ class VerificadorCampo:
                 for i in np.flatnonzero(dmax > fora):
                     fora[i] = dmax[i]
                     quem[i] = f'obst:{peca}|{oque}'
+        # O corte do experimento (se houver): a ponta também precisa ficar nele.
+        corte = self.cortes().get(experimento) if experimento else None
+        if corte is not None:
+            nome_exp = NOME_EXPERIMENTO.get(experimento, experimento)
+            for nome, pts in pecas:
+                d = fora_do_corte(corte, pts)
+                for i in np.flatnonzero(d > fora):
+                    fora[i] = d[i]
+                    quem[i] = f'corte:{nome}|{nome_exp}'
         dentro = fora <= TOLERANCIA_MM
         if dentro.all():
             return True, ''
@@ -324,6 +362,10 @@ class VerificadorCampo:
     @staticmethod
     def _onde(campo, quem, pecas, i, fora):
         """Texto de onde a peça sai do campo (ou bate num obstáculo)."""
+        if quem.startswith('corte:'):
+            peca, exp = quem[6:].split('|', 1)
+            return (f'{peca} sairia do campo do experimento “{exp}” '
+                    f'({fora[i]:.0f} mm além do corte)')
         if quem.startswith('obst:'):
             peca, oque, onde = quem[5:].split('|', 2)
             return f'{peca} {oque} ({fora[i]:.0f} mm {onde})'
@@ -334,6 +376,108 @@ class VerificadorCampo:
             return f'{quem} ficaria {z - campo.teto_z:.0f} mm acima do topo do campo'
         return (f'{quem} sairia do campo de trabalho ({_fora_mm(campo, (x, y, z)):.0f} mm '
                 f'além da parede, a {z:.0f} mm de altura)')
+
+
+# --- cortes por experimento ---------------------------------------------------
+#
+# Um corte é um polígono visto de cima (x, y em mm, no referencial do robô) e uma
+# faixa de alturas (z_min..z_max mm). O campo do experimento é o campo geral
+# DENTRO do corte: a ponta precisa estar no campo geral E no corte. Um corte
+# nunca aumenta o campo.
+
+def poligono_simples(pts):
+    """True se o polígono (lista de (x, y)) não cruza a si mesmo."""
+    n = len(pts)
+
+    def cruza(a, b, c, d):
+        def lado(p, q, r):
+            return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+        d1, d2 = lado(c, d, a), lado(c, d, b)
+        d3, d4 = lado(a, b, c), lado(a, b, d)
+        return d1 * d2 < 0 and d3 * d4 < 0
+    for i in range(n):
+        a, b = pts[i], pts[(i + 1) % n]
+        for j in range(i + 1, n):
+            if j == i or (j + 1) % n == i or j == (i + 1) % n:
+                continue                       # lados vizinhos
+            if cruza(a, b, pts[j], pts[(j + 1) % n]):
+                return False
+    return True
+
+
+def area_poligono(pts):
+    """Área (mm²) do polígono."""
+    p = np.asarray(pts, float)
+    x, y = p[:, 0], p[:, 1]
+    return 0.5 * abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
+
+
+def validar_corte(corte):
+    """(ok, motivo). Um corte precisa de 3 ou mais cantos, não cruzar a si mesmo,
+    ter área e uma faixa de alturas com mínimo abaixo do máximo."""
+    try:
+        pts = [(float(x), float(y)) for x, y in corte['poligono_mm']]
+        z0, z1 = float(corte['z_min_mm']), float(corte['z_max_mm'])
+    except (KeyError, TypeError, ValueError):
+        return False, 'corte incompleto'
+    if len(pts) < 3:
+        return False, 'o corte precisa de pelo menos 3 cantos'
+    if not poligono_simples(pts):
+        return False, 'o desenho do corte cruza a si mesmo'
+    if area_poligono(pts) < 100.0:
+        return False, 'o corte não tem área'
+    if not z0 < z1:
+        return False, 'a altura mínima precisa ser menor que a máxima'
+    return True, ''
+
+
+def ler_cortes(caminho=CORTES_PATH):
+    """{chave do experimento: corte} dos cortes salvos e válidos ({} se nenhum)."""
+    try:
+        with open(caminho, encoding='utf-8') as f:
+            dados = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    cortes = {}
+    for chave, corte in (dados.get('experimentos') or {}).items():
+        if chave in NOME_EXPERIMENTO and isinstance(corte, dict) and validar_corte(corte)[0]:
+            cortes[chave] = corte
+    return cortes
+
+
+def salvar_cortes(cortes, caminho=CORTES_PATH):
+    """Grava {chave: corte} (sem cortar o arquivo pela metade)."""
+    os.makedirs(os.path.dirname(caminho), exist_ok=True)
+    tmp = caminho + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump({'versao': 1, 'experimentos': cortes}, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, caminho)
+
+
+def fora_do_corte(corte, pts):
+    """Quanto (mm) cada ponto (N, 3) está fora do corte; 0 ou menos = dentro.
+    Fora do polígono conta a distância até a borda dele; fora da faixa de alturas,
+    a distância até ela (vale a maior das duas)."""
+    pts = np.atleast_2d(np.asarray(pts, float))
+    poli = np.asarray(corte['poligono_mm'], float)
+    x, y, z = pts[:, 0], pts[:, 1], pts[:, 2]
+    a, b = poli, np.roll(poli, -1, axis=0)
+    # Dentro do polígono (raio cruzando as bordas).
+    cruza = ((a[None, :, 1] > y[:, None]) != (b[None, :, 1] > y[:, None]))
+    dy = np.where(b[:, 1] - a[:, 1] == 0, 1e-12, b[:, 1] - a[:, 1])
+    x_corte = a[None, :, 0] + (y[:, None] - a[None, :, 1]) * (b[:, 0] - a[:, 0])[None, :] / dy[None, :]
+    dentro = (cruza & (x[:, None] < x_corte)).sum(axis=1) % 2 == 1
+    # Distância até a borda.
+    e = b - a
+    t = ((x[:, None] - a[None, :, 0]) * e[None, :, 0] + (y[:, None] - a[None, :, 1]) * e[None, :, 1]) \
+        / np.maximum((e ** 2).sum(axis=1), 1e-12)[None, :]
+    t = np.clip(t, 0.0, 1.0)
+    px = a[None, :, 0] + t * e[None, :, 0]
+    py = a[None, :, 1] + t * e[None, :, 1]
+    dist = np.hypot(x[:, None] - px, y[:, None] - py).min(axis=1)
+    plano = np.where(dentro, -dist, dist)
+    altura = np.maximum(float(corte['z_min_mm']) - z, z - float(corte['z_max_mm']))
+    return np.maximum(plano, altura)
 
 
 def altura_da_mesa(modelo, pontos):

@@ -45,6 +45,11 @@ A base da interface:
   Um segundo robô 3D mostra o **campo calculado pela base**: paredes verticais subindo do
   contorno dos pontos da base, cortadas pelo alcance do braço com a ponta para baixo
   (cinemática inversa), sem passar do campo medido.
+- **Campo do Experimento**: escolha um experimento (por enquanto, Controle das Juntas) e
+  desenhe numa vista de cima da mesa o polígono onde ele pode trabalhar, com uma faixa de
+  alturas. O campo do experimento é o campo de trabalho geral dentro desse corte (o corte só
+  diminui, nunca aumenta), e o campo geral não muda. Os movimentos da aba do experimento são
+  conferidos também contra o corte. Os cortes ficam em `~/.config/iris/campos_experimentos.json`.
 - **Segurança dos movimentos**: todo movimento por comando (juntas, Home, Robô 3D, levar até
   um ponto) é conferido pelo servidor antes de ir para o robô. O caminho inteiro do MovJ é
   calculado (cinemática direta, a cada 0,5° nas juntas); se o flange, ou a ponta da célula de

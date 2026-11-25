@@ -120,9 +120,10 @@ class RosBridge(Node):
     def call_disconnect(self, callback):
         self._trigger(self.disconnect_client, 'disconnect', callback)
 
-    def call_jog(self, joints, callback):
+    def call_jog(self, joints, callback, experimento=''):
         request = JogJoint.Request()
         request.joints = [float(j) for j in joints]
+        request.experimento = experimento
         self._chamar(self.jog_client, 'jog_joint', request, callback, 2.0, self._ok_msg)
 
     def call_set_speed(self, percent, callback):
@@ -140,13 +141,14 @@ class RosBridge(Node):
         self._chamar(self.get_joints_client, 'get_joints', GetJoints.Request(),
                      callback, 3.0, extrair)
 
-    def call_move_joint(self, joints, feedback_callback, done_callback):
+    def call_move_joint(self, joints, feedback_callback, done_callback, experimento=''):
         if not self.move_joint_client.wait_for_server(timeout_sec=3.0):
             done_callback(False, 'Servidor da action /move_joint indisponível')
             return
 
         goal = MoveJoint.Goal()
         goal.joints = [float(j) for j in joints]
+        goal.experimento = experimento
 
         def _feedback(feedback_msg):
             feedback_callback(feedback_msg.feedback.status)
