@@ -30,6 +30,7 @@ PACKET_SIZE = 1440
 MARCADOR = struct.pack('<H', PACKET_SIZE)          # byte 0: MessageSize
 VALOR_TESTE = 0x0123456789ABCDEF                    # byte 48: "Memory structure test"
 OFFSET_TESTE = 48
+OFFSET_MODO_ROBO = 24     # RobotMode (uint64): 6 = drag mode
 OFFSET_VELOCIDADE_GLOBAL = 64  # SpeedScaling: a velocidade global que o robô está usando
 OFFSET_ANGULO = 432       # Actual joint position (registro 1216)
 OFFSET_VELOCIDADE = 480   # Actual joint speed (1240)
@@ -62,7 +63,10 @@ def ler_pacote(pacote):
         'temperatura': seis(OFFSET_TEMPERATURA),
         'torque': seis(OFFSET_TORQUE),
         'velocidade_global': struct.unpack_from('<d', pacote, OFFSET_VELOCIDADE_GLOBAL)[0],
+        'modo_robo': struct.unpack_from('<Q', pacote, OFFSET_MODO_ROBO)[0],
     }
+    if not 0 <= dados['modo_robo'] <= 20:
+        dados['modo_robo'] = -1
     if not all(math.isfinite(v) and abs(v) <= 400.0 for v in dados['angulo']):
         return None
     # Esforço fora de qualquer faixa plausível = campo que este firmware não
@@ -195,6 +199,7 @@ class EstadoJuntasNode(Node):
         msg.corrente_a = [float(v) for v in dados['corrente']]
         msg.temperatura_c = [float(v) for v in dados['temperatura']]
         msg.torque_nm = [float(v) for v in dados['torque']]
+        msg.modo_robo = int(dados.get('modo_robo', -1))
         msg.esforco_disponivel = any(math.isfinite(v) for v in dados['corrente'] + dados['temperatura'])
         self.pub.publish(msg)
 

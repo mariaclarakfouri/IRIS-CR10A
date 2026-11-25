@@ -5,7 +5,7 @@ configurações da interface, e começa na posição de repouso do robô.
 
 O cartão `CartaoHome` fica no Controle Juntas: as 6 juntas, "Usar posição atual"
 (só preenche os campos), "Gravar home" (pede confirmação e salva), "Ir para a
-home" (pede confirmação e move) e "Mover manualmente". O "Ir para Home" da barra
+home" (pede confirmação e move) e "Drag mode". O "Ir para Home" da barra
 de cima vai para esta mesma home.
 """
 from PyQt5.QtWidgets import (QDoubleSpinBox, QHBoxLayout, QPushButton,
@@ -25,9 +25,11 @@ NOME_HOME = dict(HOMES)
 HOME_PADRAO = 'controle_juntas'
 
 
-DICA_ARRASTAR = ('Liga o modo arrastar do robô (o mesmo do botão no braço): você guia o '
-                 'braço com a mão. Para travar de novo, clique em Parar.')
+DICA_ARRASTAR = ('Liga o drag mode do robô (o mesmo do botão no braço): você guia o braço '
+                 'com a mão. Para sair, aperte o botão no robô ou clique em "Desabilitar drag".')
 DICA_ARRASTAR_SIM = 'Só no robô real: o gêmeo virtual não pode ser guiado com a mão.'
+TEXTO_DRAG = 'Drag mode'
+TEXTO_SAIR_DRAG = 'Desabilitar drag'
 
 
 def texto_juntas(juntas):
@@ -51,9 +53,9 @@ class CartaoHome(Cartao):
         self.valores = rotulo('', 'valorMono')
         self.ir_btn = com_icone(QPushButton('Ir para a home'), 'home')
         self.ir_btn.clicked.connect(lambda: self.janela.ir_para_home(self.chave))
-        self.mao_btn = QPushButton('Mover manualmente')
+        self.mao_btn = QPushButton(TEXTO_DRAG)
         self.mao_btn.setObjectName('secundario')
-        self.mao_btn.clicked.connect(self.janela.mover_manualmente)
+        self.mao_btn.clicked.connect(self.janela.alternar_drag)
         self.alterar_btn = QPushButton('Alterar home')
         self.alterar_btn.setObjectName('discreto')
         self.alterar_btn.clicked.connect(self._abrir_editor)
@@ -142,7 +144,9 @@ class CartaoHome(Cartao):
         self.estado.setText(txt)
         self.estado.setStyleSheet(f'color: {cor};')
         self.ir_btn.setEnabled(self._movimento_ok and home is not None)
-        self.mao_btn.setEnabled(self._movimento_ok and not self.janela.sim_mode)
+        atualizar = getattr(self.janela, 'atualizar_botoes_drag', None)
+        if callable(atualizar):
+            atualizar()            # o botão de drag segue o estado da janela
 
     def definir_movimento_habilitado(self, ok):
         self._movimento_ok = bool(ok)

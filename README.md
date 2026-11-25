@@ -23,8 +23,10 @@ A base da interface:
 - **Controle Juntas**: movimento de cada junta em tempo real e a **home** (com **Ir para a
   home** e **Alterar home**).
 - **Velocidade** ajustável na barra do robô (até 50%).
-- **Mover manualmente** (modo arrastar): o braço fica solto para ser guiado com a mão, até
-  clicar em Parar. Fica na barra de cima e no cartão da home. Só no robô real.
+- **Drag mode**: o braço fica solto para ser guiado com a mão. O botão funciona como o
+  Conectar: liga e fica ligado (o estado mostra "Drag mode"); para sair, aperte o botão no
+  robô ou clique em **Desabilitar drag**. A interface percebe quando o robô entra ou sai do
+  drag mode pelo botão do braço. Fica na barra de cima e no cartão da home. Só no robô real.
 - **Parar movimento** e **EMERGÊNCIA**.
 - **Célula de Carga** (FA7155): força e momento ao vivo em gráfico e tara.
 - **Robô 3D**: o CR10A em 3D seguindo o robô em tempo real, com o que estiver na ponta (nada ou, com `com-celula`, a célula). O comando
@@ -52,7 +54,7 @@ A base da interface:
   malhas 3D): nenhuma peça pode descer abaixo do tampo da mesa (altura pelo ponto "mesa"),
   passar das paredes retas do computador e da esquerda, nem subir acima do teto. Paredes e
   teto ficam onde o corpo do robô chegou na medição (`PAREDES` e `TETO_MM` em
-  `dobot_gui/seguranca.py`). O "Mover manualmente"
+  `dobot_gui/seguranca.py`). O drag mode
   (guiar com a mão) não passa por essa conferência.
 - **Registro** de tudo o que foi feito.
 - **Gêmeo virtual** do CR10A no Gazebo: no modo simulação, os comandos movem só o gêmeo, e

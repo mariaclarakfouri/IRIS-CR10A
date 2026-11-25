@@ -32,10 +32,15 @@ POLL_TIMEOUT_SECONDS = 2.0
 POLL_FAILS_BEFORE_LOST = 2
 
 # Estados do robô: (texto, cor, aviso mostrado nos controles bloqueados).
+# RobotMode do controlador Dobot com o drag mode ligado (braço guiado com a mão).
+MODO_DRAG = 6
+
 ROBOT_STATES = {
     'disconnected': ('Desconectado', '#94a3b8', 'Conecte ao robô primeiro.'),
     'connected': ('Conectado', '#22c55e', ''),
     'moving': ('Em movimento', '#3b82f6', 'Aguarde o movimento terminar.'),
+    'drag': ('Drag mode', '#a855f7',
+             'Robô em drag mode: saia pelo botão do robô ou em "Desabilitar drag".'),
     'lost': ('Sem resposta do robô', '#f97316',
              'Sem resposta do robô: verifique o cabo e a rede.'),
     'alarm': ('Alarme limpo — clique em Conectar', '#f59e0b',

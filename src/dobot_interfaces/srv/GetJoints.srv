@@ -2,3 +2,5 @@
 bool success
 string message
 float64[6] joints
+# Modo do controlador (RobotMode()): 6 = drag mode. -1 = desconhecido.
+int32 modo_robo

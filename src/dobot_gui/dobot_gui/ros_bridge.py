@@ -105,7 +105,7 @@ class RosBridge(Node):
         self._trigger(self.stop_motion_client, 'stop_motion', callback, 2.0)
 
     def call_arrastar(self, ligar, callback):
-        """Liga ou desliga o modo arrastar (mover o robô com a mão).
+        """Liga ou desliga o drag mode (mover o robô com a mão).
         `callback(ok, mensagem)`."""
         request = SetBool.Request()
         request.data = bool(ligar)
@@ -134,6 +134,8 @@ class RosBridge(Node):
         def extrair(res, erro):
             if res is None:
                 return False, erro, None
+            # O modo do robô (RobotMode) chega junto: 6 = drag mode.
+            self.ultimo_modo_robo = int(getattr(res, 'modo_robo', -1))
             return res.success, res.message, list(res.joints)
         self._chamar(self.get_joints_client, 'get_joints', GetJoints.Request(),
                      callback, 3.0, extrair)

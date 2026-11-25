@@ -9,7 +9,7 @@ robô. Ali o caminho inteiro do MovJ (da posição atual até o destino) é conf
 contra o campo de trabalho calculado (dobot_gui.seguranca): se o flange ou a
 ponta da ferramenta sairiam do campo, ou qualquer peça do robô desceria abaixo
 do tampo da mesa, em algum momento, o movimento é recusado e nada é enviado ao
-robô. O modo arrastar (mover com a mão) não passa por aqui.
+robô. O drag mode (mover com a mão) não passa por aqui.
 """
 import signal
 import socket
@@ -33,6 +33,7 @@ SLEEP_STEP = 0.2  # granularidade da espera durante o movimento, pra poder abort
 TOLERANCIA_GRAUS = 0.5  # o robô "chegou" quando todas as juntas estão a menos disso do destino
 TEMPO_MAXIMO_MOVIMENTO = 180  # desiste de esperar o robô chegar depois disso (s)
 COMMAND_TIMEOUT = 5.0  # segundos esperando a resposta do robô antes de considerar que ele parou de responder
+MODO_DRAG = 6  # RobotMode do controlador Dobot com o drag mode ligado
 TEMPO_PARADO_SEM_CHEGAR = 3.0  # se o robô fica parado esse tempo longe do destino, desiste (s)
 
 
@@ -141,11 +142,12 @@ class DobotActionServer(Node):
     def _verificar_movimento(self, alvo):
         """Ponto único por onde todo movimento passa antes de ser enviado.
 
-        Recusa: modo arrastar ligado, ou o caminho do MovJ (da partida até o
+        Recusa: drag mode ligado, ou o caminho do MovJ (da partida até o
         `alvo`) saindo do campo de trabalho calculado em qualquer momento.
         Devolve (ok, motivo)."""
-        if self._arrastando:
-            return False, self._bloqueio_arrastar()
+        bloqueio = self._bloqueio_arrastar()
+        if bloqueio:
+            return False, bloqueio
         if self._seguranca is None:
             return False, ('NÃO É SEGURO: o verificador do campo de trabalho não carregou '
                            f'({self._erro_seguranca}). Movimento recusado.')
@@ -178,11 +180,27 @@ class DobotActionServer(Node):
     # --- modo arrastar (mover o robô com a mão) ---
 
     def _bloqueio_arrastar(self):
-        """Mensagem de recusa enquanto o modo arrastar está ligado ('' se não)."""
+        """Mensagem de recusa enquanto o drag mode está ligado ('' se não). No
+        robô real, confere no próprio controlador (RobotMode 6 = drag mode): ele
+        pode ter entrado ou saído pelo botão do braço, sem passar pela interface."""
+        if self.modo != 'sim':
+            modo = self._modo_robo()
+            if modo is not None:
+                self._arrastando = (modo == MODO_DRAG)
         if self._arrastando:
-            return ('O robô está no modo arrastar (sendo movido com a mão). Saia dele '
-                    '(Parar) antes de mandar um movimento.')
+            return ('O robô está em drag mode (sendo movido com a mão). Saia dele (botão '
+                    'do robô ou "Desabilitar drag") antes de mandar um movimento.')
         return ''
+
+    def _modo_robo(self):
+        """RobotMode do controlador (int), ou None se não der para ler."""
+        try:
+            res = self._send('RobotMode()', lock_timeout=3.0)
+            if not res.startswith('0,'):
+                return None
+            return int(res.split('{', 1)[1].split('}', 1)[0].strip())
+        except (TimeoutError, socket.error, OSError, IndexError, ValueError):
+            return None
 
     def _sair_do_arrastar(self):
         """StopDrag(). Devolve (ok, mensagem). Marca o modo como desligado mesmo
@@ -194,9 +212,9 @@ class DobotActionServer(Node):
             res = self._send('StopDrag()', lock_timeout=3.0)
         except (TimeoutError, socket.error, OSError) as e:
             return False, f'StopDrag() falhou: {e}'
-        self.get_logger().warn(f'[ARRASTAR] StopDrag() -> {res.strip()}')
+        self.get_logger().warn(f'[DRAG] StopDrag() -> {res.strip()}')
         if res.startswith('0,'):
-            return True, 'Modo arrastar desligado: o robô voltou a segurar a posição.'
+            return True, 'Drag mode desligado: o robô voltou a segurar a posição.'
         return False, f'StopDrag() recusado pelo robô: {res.strip()}'
 
     def arrastar_callback(self, request, response):
@@ -212,7 +230,7 @@ class DobotActionServer(Node):
             return response
         if self.modo == 'sim':
             response.success = False
-            response.message = ('O modo arrastar só existe no robô real: o gêmeo virtual não '
+            response.message = ('O drag mode só existe no robô real: o gêmeo virtual não '
                                 'pode ser guiado com a mão.')
             return response
         if self.emergency_stop_flag:
@@ -221,7 +239,7 @@ class DobotActionServer(Node):
             return response
         if not self._robo_parado():
             response.success = False
-            response.message = ('Para entrar no modo arrastar, o robô precisa estar habilitado '
+            response.message = ('Para entrar em drag mode, o robô precisa estar habilitado '
                                 'e parado, sem movimento nem alarme.')
             return response
         try:
@@ -229,17 +247,17 @@ class DobotActionServer(Node):
         except (TimeoutError, socket.error, OSError) as e:
             response.success, response.message = False, f'Sem resposta do robô: {e}'
             return response
-        self.get_logger().warn(f'[ARRASTAR] StartDrag() -> {res.strip()}')
+        self.get_logger().warn(f'[DRAG] StartDrag() -> {res.strip()}')
         if not res.startswith('0,'):
             erro = self._send('GetErrorID()')
             response.success = False
-            response.message = (f'O robô recusou o modo arrastar: {res.strip()} | '
+            response.message = (f'O robô recusou o drag mode: {res.strip()} | '
                                 f'GetErrorID: {erro.strip()}')
             return response
         self._arrastando = True
         self._ultimo_alvo = None
         response.success = True
-        response.message = 'Modo arrastar ligado: segure o braço e mova com a mão.'
+        response.message = 'Drag mode ligado: segure o braço e mova com a mão.'
         return response
 
     def _robo_parado(self):
@@ -450,6 +468,7 @@ class DobotActionServer(Node):
             response.success = False
             response.message = 'Robô não conectado. Clique em Conectar primeiro.'
             response.joints = [0.0] * 6
+            response.modo_robo = -1
             return response
 
         try:
@@ -458,6 +477,7 @@ class DobotActionServer(Node):
             response.success = False
             response.message = f'Sem resposta do robô: {e}'
             response.joints = [0.0] * 6
+            response.modo_robo = -1
             return response
         try:
             if not res.startswith('0,'):
@@ -474,7 +494,12 @@ class DobotActionServer(Node):
             response.success = False
             response.message = f'Erro ao ler GetAngle(): {e} | resposta: {res.strip()}'
             response.joints = [0.0] * 6
-
+        # O modo do robô vai junto: a interface percebe o drag mode ligado ou
+        # desligado pelo botão do braço (RobotMode 6).
+        modo = self._modo_robo() if (response.success and self.modo != 'sim') else None
+        response.modo_robo = -1 if modo is None else int(modo)
+        if modo is not None:
+            self._arrastando = (modo == MODO_DRAG)
         return response
 
     def stop_motion_callback(self, request, response):

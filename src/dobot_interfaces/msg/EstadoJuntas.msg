@@ -13,3 +13,7 @@ bool esforco_disponivel
 float64[6] corrente_a
 float64[6] temperatura_c
 float64[6] torque_nm
+# Modo do controlador (RobotMode): 5 = habilitado e parado, 6 = drag mode (o
+# braço guiado com a mão), 7 = em movimento, 9 = erro... -1 = desconhecido
+# (simulação, ou sem leitura).
+int32 modo_robo

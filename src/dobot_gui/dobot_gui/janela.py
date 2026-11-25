@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .constantes import (
+    MODO_DRAG,
     APP_NOME,
     APP_SUBTITULO,
     APP_VERSION,
@@ -46,8 +47,8 @@ from .constantes import (
     VELOCIDADE_INICIAL,
     VELOCIDADE_MAXIMA_PERMITIDA,
 )
-from .homes import (DICA_ARRASTAR, DICA_ARRASTAR_SIM, HOME_PADRAO, NOME_HOME, CartaoHome,
-                    texto_juntas)
+from .homes import (DICA_ARRASTAR, DICA_ARRASTAR_SIM, HOME_PADRAO, NOME_HOME, TEXTO_DRAG,
+                    TEXTO_SAIR_DRAG, CartaoHome, texto_juntas)
 from .modulos import MODULO_REGISTRO, MODULOS
 from .tema import COR, app_icon, make_icon
 from .widgets import (
@@ -76,6 +77,8 @@ class JanelaPrincipal(QWidget):
     progresso = pyqtSignal(object)        # dict, ver PainelAtividade.atualizar
     acao_resultado = pyqtSignal(bool, str)
     log_message = pyqtSignal(str)
+    drag_result = pyqtSignal(bool, bool, str)   # pedido (ligar?), ok, mensagem
+    modo_robo_recebido = pyqtSignal(int)        # RobotMode lido da porta de feedback
 
     def __init__(self, ros_node):
         super().__init__()
@@ -108,7 +111,9 @@ class JanelaPrincipal(QWidget):
                 (self.clear_alarm_result, self._on_clear_alarm_result),
                 (self.progresso, self._on_progresso),
                 (self.acao_resultado, self._on_acao_resultado),
-                (self.log_message, self.log)):
+                (self.log_message, self.log),
+                (self.drag_result, self._on_drag_result),
+                (self.modo_robo_recebido, self._on_modo_robo)):
             sinal.connect(slot)
 
         # Pedido de "Parar movimento": interrompe também as ESPERAS entre os
@@ -122,6 +127,17 @@ class JanelaPrincipal(QWidget):
         self._progresso_prefixo = None
         self._action_running = False
         self._robot_state = 'disconnected'
+        # Drag mode: ligado como o Conectar (sem painel nem cronômetro); sai pelo
+        # botão "Desabilitar drag" ou pelo botão do próprio robô (percebido pelo
+        # RobotMode da porta de feedback).
+        self._drag = False
+        self._drag_pedido = False          # esperando a resposta do servidor
+        self._drag_desde = 0.0
+        self._fora_do_drag_desde = None
+        self._movimento_habilitado = False
+        assinar = getattr(ros_node, 'assinar_estado', None)
+        if callable(assinar):
+            assinar(lambda msg: self.modo_robo_recebido.emit(int(getattr(msg, 'modo_robo', -1))))
 
         self._montar()
         self._iniciar_temporizadores()
@@ -259,10 +275,10 @@ class JanelaPrincipal(QWidget):
         self.home_btn.setEnabled(False)
         self.home_btn.clicked.connect(lambda: self.ir_para_home(HOME_PADRAO))
         lay.addWidget(self.home_btn)
-        self.mao_btn = QPushButton('Mover manualmente')
+        self.mao_btn = QPushButton(TEXTO_DRAG)
         self.mao_btn.setObjectName('secundario')
         self.mao_btn.setEnabled(False)
-        self.mao_btn.clicked.connect(self.mover_manualmente)
+        self.mao_btn.clicked.connect(self.alternar_drag)
         lay.addWidget(self.mao_btn)
         lay.addStretch()
         return barra
@@ -541,12 +557,13 @@ class JanelaPrincipal(QWidget):
                 w.setToolTip(DICA_ARRASTAR)
 
     def _set_joint_controls_enabled(self, enabled):
+        self._movimento_habilitado = bool(enabled)
         self.home_btn.setEnabled(enabled)
-        self.mao_btn.setEnabled(enabled and not self.sim_mode)
         for card in self._cartoes_home:
             card.definir_movimento_habilitado(enabled)
         for m in self._paginas:
             m.definir_movimento_habilitado(enabled)
+        self.atualizar_botoes_drag()
 
     def confirmar(self, titulo, texto, texto_confirmar='Confirmar'):
         box = QMessageBox(self)
@@ -678,6 +695,7 @@ class JanelaPrincipal(QWidget):
             self.connect_btn.setProperty('connected', False)
             self.connect_btn.setEnabled(True)
             self.disconnect_btn.setEnabled(False)
+            self._drag = False
             self._set_joint_controls_enabled(False)
             self.speed_slider.setEnabled(False)
             self._set_robot_state('disconnected')
@@ -689,6 +707,7 @@ class JanelaPrincipal(QWidget):
         self._repintar_conectar()
 
     def marcar_desconectado(self):
+        self._drag = False
         self._joints_poll_timer.stop()
         self._poll_fail_count = 0
         self._set_robot_state('disconnected')
@@ -705,7 +724,8 @@ class JanelaPrincipal(QWidget):
     def _register_poll_failure(self, reason):
         self._poll_fail_count += 1
         if (self._poll_fail_count >= POLL_FAILS_BEFORE_LOST
-                and self._robot_state in ('connected', 'moving')):
+                and self._robot_state in ('connected', 'moving', 'drag')):
+            self._drag = False
             self._set_robot_state('lost')
             self._set_joint_controls_enabled(False)
             self.speed_slider.setEnabled(False)
@@ -800,6 +820,11 @@ class JanelaPrincipal(QWidget):
         robo_parado = previous is not None and not moving
         for m in self._paginas:
             m.ao_ler_juntas(joints, robo_parado)
+        # Drag mode ligado/desligado pelo botão do braço: o modo do robô vem junto
+        # com a leitura das juntas (RobotMode() do controlador).
+        modo = getattr(self.ros_node, 'ultimo_modo_robo', -1)
+        if isinstance(modo, int):
+            self._on_modo_robo(modo)
 
     # ==================================================================
     # Ações (Home, ensaios) — base usada pelos módulos
@@ -992,56 +1017,118 @@ class JanelaPrincipal(QWidget):
     # Parar movimento e emergência
     # ==================================================================
 
-    # --- Mover manualmente (modo arrastar) ---
+    # --- Drag mode (mover o robô com a mão) ---
 
-    def mover_manualmente(self):
-        """Liga o modo arrastar do robô (o mesmo do botão no braço) até o Parar."""
-        if self._action_running or self.sim_mode:
+    def atualizar_botoes_drag(self):
+        """Texto e liberação dos botões de drag (barra do topo e cartão da Home)."""
+        if not hasattr(self, 'mao_btn'):
+            return
+        if self._drag:
+            texto, ok = TEXTO_SAIR_DRAG, not self._drag_pedido
+        else:
+            texto = TEXTO_DRAG
+            ok = (self._movimento_habilitado and not self.sim_mode and not self._drag_pedido
+                  and not self._action_running)
+        for w in [self.mao_btn] + [c.mao_btn for c in getattr(self, '_cartoes_home', [])]:
+            w.setText(texto)
+            w.setEnabled(ok)
+
+    def alternar_drag(self):
+        """Liga o drag mode (com confirmação) ou desliga, se já está ligado."""
+        if self._drag_pedido:
+            return
+        if self._drag:
+            self._pedir_drag(False)
+            return
+        if self._action_running or self.sim_mode or not self._movimento_habilitado:
             return
         ferramentas = self.modulo('Ferramentas')
         f = ferramentas.ativa() if ferramentas is not None else None
         peso = (f'\n\nFerramenta escolhida no IRIS: {f["nome"]} ({f["massa_kg"]:.3f} kg).'
                 if f else '')
-        texto = ('O robô vai ficar solto para ser guiado com a mão (modo arrastar do '
-                 'controlador, o mesmo do botão no braço).\n\n'
+        texto = ('O robô vai entrar em drag mode: fica solto para ser guiado com a mão (o '
+                 'mesmo do botão no braço).\n\n'
                  '• Segure o braço antes de confirmar e mova devagar.\n'
-                 '• Para o robô voltar a segurar a posição, clique em Parar (ou EMERGÊNCIA).\n'
+                 '• Para sair, aperte o botão no robô ou clique em "Desabilitar drag".\n'
                  '• Enquanto isso, nenhum movimento por comando é aceito.\n'
                  '• Dá para gravar pontos no Campo de Trabalho: solte o braço, espere '
                  '"robô parado" e grave.\n\n'
                  'O peso configurado no controlador do robô (DobotStudio) precisa ser o da '
                  'ferramenta que está montada, senão o braço pode cair ou subir sozinho.'
                  + peso)
-        if not self.confirmar('Mover manualmente', texto, 'Ligar o modo arrastar'):
+        if not self.confirmar('Drag mode', texto, 'Ligar drag mode'):
             return
-        self.iniciar_acao('Mover manualmente', 'Modo arrastar: o robô está sendo movido com a mão.')
-        threading.Thread(target=self._executar_arrastar, daemon=True).start()
+        self._pedir_drag(True)
 
-    def _executar_arrastar(self):
-        """Liga o modo arrastar, espera o Parar (ou a EMERGÊNCIA) e desliga."""
-        def pedir(ligar):
-            fim, res = threading.Event(), {}
-            self.ros_node.call_arrastar(
-                ligar, lambda ok, msg: (res.update(ok=ok, msg=msg), fim.set()))
-            fim.wait(6.0)
-            return res.get('ok', False), res.get('msg') or 'O robô não respondeu.'
+    def _pedir_drag(self, ligar):
+        self._drag_pedido = True
+        self.atualizar_botoes_drag()
+        self.alerta.mostrar('Ligando o drag mode...' if ligar else 'Desligando o drag mode...')
+        threading.Thread(
+            target=self.ros_node.call_arrastar,
+            args=(ligar, lambda ok, msg: self.drag_result.emit(ligar, ok, msg)),
+            daemon=True,
+        ).start()
 
-        ok, msg = pedir(True)
-        if not ok:
-            self.terminar_acao(False, msg)
+    def _on_drag_result(self, ligar, ok, msg):
+        self._drag_pedido = False
+        if ok:
+            self._definir_drag(ligar)
+            self.log(msg)
+            self.alerta.mostrar(msg, 'info' if ligar else 'ok')
+        else:
+            self.log(f'Drag mode: {msg}', 'ERRO')
+            self.alerta.mostrar(f'Drag mode: {msg}', 'erro')
+            self.atualizar_botoes_drag()
+
+    def _definir_drag(self, ligado):
+        """Muda a interface para o drag mode ligado/desligado."""
+        if ligado == self._drag:
+            self.atualizar_botoes_drag()
             return
-        self.progresso.emit({'cronometro': (time.monotonic(), None),
-                             'detalhe': 'Segure o braço e mova com a mão. Para travar o robô, '
-                                        'clique em Parar.'})
-        while not self.parado():
-            self.esperar(0.2)
-        if self._emergencia_acionada:
-            self.terminar_acao(False, 'Modo arrastar interrompido pela EMERGÊNCIA.')
+        self._drag = ligado
+        self._fora_do_drag_desde = None
+        if ligado:
+            self._drag_desde = time.monotonic()
+            self._set_robot_state('drag')
+            # Movimentos por comando travados (o servidor também recusa).
+            self._set_joint_controls_enabled(False)
+        else:
+            if self._robot_state == 'drag':
+                self._set_robot_state('connected')
+                self._set_joint_controls_enabled(self._speed_confirmed)
+        self.atualizar_botoes_drag()
+
+    def _on_modo_robo(self, modo):
+        """RobotMode do robô (porta de feedback, ~25 por segundo): percebe o drag
+        mode ligado ou desligado pelo botão do braço."""
+        if modo < 0 or self.sim_mode:
             return
-        # O Parar do servidor já sai do modo; aqui garante (se já saiu, é inofensivo).
-        ok, msg = pedir(False)
-        self.terminar_acao(ok, 'Modo arrastar desligado: o robô voltou a segurar a posição.'
-                           if ok else msg)
+        anterior = getattr(self, '_ultimo_modo_robo', None)
+        self._ultimo_modo_robo = modo
+        if anterior is not None and (modo == MODO_DRAG) != (anterior == MODO_DRAG):
+            self.log(f'O robô informou o modo {modo}'
+                     + (' (drag mode).' if modo == MODO_DRAG else f' (saiu do drag mode).'))
+        if self._drag_pedido:
+            return
+        if self._robot_state not in ('connected', 'moving', 'drag'):
+            return
+        agora = time.monotonic()
+        if modo == MODO_DRAG:
+            self._fora_do_drag_desde = None
+            if not self._drag:
+                self._definir_drag(True)
+                self.log('Drag mode ligado pelo botão do robô.')
+                self.alerta.mostrar('Drag mode ligado pelo botão do robô.', 'info')
+            return
+        if not self._drag or agora - self._drag_desde < 1.5:
+            return            # logo depois de ligar, o robô ainda está trocando de modo
+        if self._fora_do_drag_desde is None:
+            self._fora_do_drag_desde = agora
+        elif agora - self._fora_do_drag_desde > 0.5:
+            self._definir_drag(False)
+            self.log('Drag mode desligado pelo botão do robô: o robô voltou a segurar a posição.')
+            self.alerta.mostrar('Drag mode desligado pelo botão do robô.', 'ok')
 
     def on_stop_motion_clicked(self):
         self._parar_evento.set()
@@ -1086,6 +1173,8 @@ class JanelaPrincipal(QWidget):
             self.log(f'FALHA ao enviar a parada de emergência: {msg}', 'ERRO')
             self.alerta.mostrar(f'FALHA ao enviar PARADA DE EMERGÊNCIA: {msg}', 'erro')
 
+        self._drag = False
+        self._drag_pedido = False
         self._joints_poll_timer.stop()
         self._set_robot_state('emergency')
         # Trava tudo que move o robô. Só libera de novo depois de reconectar
