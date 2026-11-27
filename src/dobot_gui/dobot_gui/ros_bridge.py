@@ -35,6 +35,9 @@ class RosBridge(Node):
         # para o movimento liso.
         self._assinantes_estado = []
         self.create_subscription(EstadoJuntas, '/dobot/estado_juntas', self._on_estado, 10)
+        # Avisos do servidor de movimento (ex.: drag mode desligado pela segurança).
+        self._assinantes_aviso = []
+        self.create_subscription(String, '/dobot/aviso', self._on_aviso, 10)
         # Célula de carga (nó celula_carga).
         self._assinantes_celula = []
         self._assinantes_celula_estado = []
@@ -48,6 +51,14 @@ class RosBridge(Node):
     def assinar_estado(self, callback):
         """`callback(msg)` a cada estado recebido (chamado na thread do ROS)."""
         self._assinantes_estado.append(callback)
+
+    def assinar_aviso(self, callback):
+        """`callback(texto)` a cada aviso do servidor (chamado na thread do ROS)."""
+        self._assinantes_aviso.append(callback)
+
+    def _on_aviso(self, msg):
+        for cb in list(self._assinantes_aviso):
+            cb(msg.data)
 
     def _on_estado(self, msg):
         for cb in list(self._assinantes_estado):

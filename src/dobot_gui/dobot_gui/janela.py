@@ -79,6 +79,7 @@ class JanelaPrincipal(QWidget):
     log_message = pyqtSignal(str)
     drag_result = pyqtSignal(bool, bool, str)   # pedido (ligar?), ok, mensagem
     modo_robo_recebido = pyqtSignal(int)        # RobotMode lido da porta de feedback
+    aviso_servidor = pyqtSignal(str)            # aviso do servidor (ex.: drag travado)
 
     def __init__(self, ros_node):
         super().__init__()
@@ -113,7 +114,8 @@ class JanelaPrincipal(QWidget):
                 (self.acao_resultado, self._on_acao_resultado),
                 (self.log_message, self.log),
                 (self.drag_result, self._on_drag_result),
-                (self.modo_robo_recebido, self._on_modo_robo)):
+                (self.modo_robo_recebido, self._on_modo_robo),
+                (self.aviso_servidor, self._on_aviso_servidor)):
             sinal.connect(slot)
 
         # Pedido de "Parar movimento": interrompe também as ESPERAS entre os
@@ -138,6 +140,10 @@ class JanelaPrincipal(QWidget):
         assinar = getattr(ros_node, 'assinar_estado', None)
         if callable(assinar):
             assinar(lambda msg: self.modo_robo_recebido.emit(int(getattr(msg, 'modo_robo', -1))))
+        self._drag_travado_em = 0.0          # a segurança desligou o drag (não o botão)
+        assinar_aviso = getattr(ros_node, 'assinar_aviso', None)
+        if callable(assinar_aviso):
+            assinar_aviso(lambda texto: self.aviso_servidor.emit(str(texto)))
 
         self._montar()
         self._iniciar_temporizadores()
@@ -1052,6 +1058,9 @@ class JanelaPrincipal(QWidget):
                  '• Segure o braço antes de confirmar e mova devagar.\n'
                  '• Para sair, aperte o botão no robô ou clique em "Desabilitar drag".\n'
                  '• Enquanto isso, nenhum movimento por comando é aceito.\n'
+                 '• A segurança continua valendo: se o robô for sair do campo de trabalho ou '
+                 'bater na mesa, nas paredes ou no teto, o drag desliga sozinho e o robô '
+                 'trava onde está.\n'
                  '• Dá para gravar pontos no Campo de Trabalho: solte o braço, espere '
                  '"robô parado" e grave.\n\n'
                  'O peso configurado no controlador do robô (DobotStudio) precisa ser o da '
@@ -1100,6 +1109,16 @@ class JanelaPrincipal(QWidget):
                 self._set_joint_controls_enabled(self._speed_confirmed)
         self.atualizar_botoes_drag()
 
+    def _on_aviso_servidor(self, texto):
+        """Aviso do servidor. Drag mode desligado pela segurança: a interface sai
+        do drag e mostra o motivo numa janela."""
+        if 'drag mode desligado' in texto:
+            self._drag_travado_em = time.monotonic()
+            self._definir_drag(False)
+        if not self.avisar_inseguro(texto):
+            self.log(texto, 'AVISO')
+            self.alerta.mostrar(texto, 'aviso')
+
     def _on_modo_robo(self, modo):
         """RobotMode do robô (porta de feedback, ~25 por segundo): percebe o drag
         mode ligado ou desligado pelo botão do braço."""
@@ -1127,6 +1146,9 @@ class JanelaPrincipal(QWidget):
         if self._fora_do_drag_desde is None:
             self._fora_do_drag_desde = agora
         elif agora - self._fora_do_drag_desde > 0.5:
+            if agora - self._drag_travado_em < 5.0:
+                self._definir_drag(False)       # foi a segurança (já avisou)
+                return
             self._definir_drag(False)
             self.log('Drag mode desligado pelo botão do robô: o robô voltou a segurar a posição.')
             self.alerta.mostrar('Drag mode desligado pelo botão do robô.', 'ok')

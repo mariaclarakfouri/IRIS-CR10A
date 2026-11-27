@@ -69,8 +69,8 @@ RAIO_CELULA_MM = 44.0          # raio da célula (para a mesa: a ferramenta é u
 # Parede: (nome, direção para fora (x, y) no referencial do robô, distância do
 # eixo da junta 1 em mm).
 PAREDES = (
-    ('do computador', (-1.0, 0.0), 591.8),
-    ('da esquerda', (0.0, -1.0), 724.6),
+    ('da esquerda', (-1.0, 0.0), 641.8),     # 591,8 + 5 cm (pedido em 26/11/2026)
+    ('do computador', (0.0, -1.0), 724.6),
 )
 TETO_MM = 1370.7
 # Peças que só giram em volta do eixo vertical (base, junta 1): não descem.
@@ -302,6 +302,32 @@ class VerificadorCampo:
             return False, (f'NÃO É SEGURO: {erro}. Sem o campo de trabalho não dá para '
                            'conferir o movimento, então ele foi recusado.')
         qs = self.caminho(inicio, alvo)
+        fora, quem, pecas = self._avaliar(campo, qs, experimento)
+        dentro = fora <= TOLERANCIA_MM
+        if dentro.all():
+            return True, ''
+        fim = '. Movimento recusado; o robô não se mexeu.'
+        if not dentro[-1]:
+            return False, ('NÃO É SEGURO ir para esse ponto: no destino, '
+                           + self._onde(campo, quem[-1], pecas, len(qs) - 1, fora) + fim)
+        primeiro = 0
+        if not dentro[0]:
+            # Já está fora: vale só voltar para dentro e não sair mais.
+            primeiro = int(np.argmax(dentro))
+            if dentro[primeiro:].all():
+                return True, ''
+        sai = primeiro + int(np.argmin(dentro[primeiro:]))       # onde sai do campo
+        pior = primeiro + int(np.argmax(fora[primeiro:]))        # onde fica mais longe
+        pct = 100.0 * sai / (len(qs) - 1)
+        return False, ('NÃO É SEGURO ir para esse ponto: no caminho até ele, a partir de '
+                       f'{pct:.0f}% do movimento, '
+                       + self._onde(campo, quem[pior], pecas, pior, fora)
+                       + ' (o destino é seguro, mas o caminho do robô até ele não)' + fim)
+
+    def _avaliar(self, campo, qs, experimento=''):
+        """Para cada posição qs (N, 6): quanto (mm) ela está fora (o pior entre a
+        ponta no campo, o robô inteiro nos obstáculos e o corte do experimento) e
+        de quem. Devolve (fora (N,), quem [N], pecas)."""
         flange, eixo = self.fk.flange(qs)
         pecas = [('o flange', flange)]
         if self.ferramenta_mm > 0:
@@ -338,26 +364,18 @@ class VerificadorCampo:
                 for i in np.flatnonzero(d > fora):
                     fora[i] = d[i]
                     quem[i] = f'corte:{nome}|{nome_exp}'
-        dentro = fora <= TOLERANCIA_MM
-        if dentro.all():
-            return True, ''
-        fim = '. Movimento recusado; o robô não se mexeu.'
-        if not dentro[-1]:
-            return False, ('NÃO É SEGURO ir para esse ponto: no destino, '
-                           + self._onde(campo, quem[-1], pecas, len(qs) - 1, fora) + fim)
-        primeiro = 0
-        if not dentro[0]:
-            # Já está fora: vale só voltar para dentro e não sair mais.
-            primeiro = int(np.argmax(dentro))
-            if dentro[primeiro:].all():
-                return True, ''
-        sai = primeiro + int(np.argmin(dentro[primeiro:]))       # onde sai do campo
-        pior = primeiro + int(np.argmax(fora[primeiro:]))        # onde fica mais longe
-        pct = 100.0 * sai / (len(qs) - 1)
-        return False, ('NÃO É SEGURO ir para esse ponto: no caminho até ele, a partir de '
-                       f'{pct:.0f}% do movimento, '
-                       + self._onde(campo, quem[pior], pecas, pior, fora)
-                       + ' (o destino é seguro, mas o caminho do robô até ele não)' + fim)
+        return fora, quem, pecas
+
+    def avaliar_posicoes(self, qs):
+        """[(mm fora, texto)] para cada posição (graus): 0 ou menos = segura. Usado
+        no drag mode, para travar o robô antes de sair do campo."""
+        campo, erro = self.campo()
+        if campo is None:
+            return [(float('inf'), erro)] * len(qs)
+        qs = np.atleast_2d(np.asarray(qs, float))
+        fora, quem, pecas = self._avaliar(campo, qs)
+        return [(float(fora[i]), self._onde(campo, quem[i], pecas, i, fora) if quem[i] else '')
+                for i in range(len(qs))]
 
     @staticmethod
     def _onde(campo, quem, pecas, i, fora):

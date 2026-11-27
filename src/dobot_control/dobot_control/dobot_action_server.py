@@ -11,6 +11,7 @@ ponta da ferramenta sairiam do campo, ou qualquer peça do robô desceria abaixo
 do tampo da mesa, em algum momento, o movimento é recusado e nada é enviado ao
 robô. O drag mode (mover com a mão) não passa por aqui.
 """
+import math
 import signal
 import socket
 import threading
@@ -21,10 +22,12 @@ from rclpy.action import ActionServer
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 
-from dobot_gui.seguranca import COMPRIMENTO_CELULA_MM, VerificadorCampo
+from dobot_gui.seguranca import COMPRIMENTO_CELULA_MM, TOLERANCIA_MM, VerificadorCampo
 from dobot_interfaces.action import MoveJoint
+from dobot_interfaces.msg import EstadoJuntas
 from dobot_interfaces.srv import GetJoints, JogJoint, SetSpeed
 
 TEMPO_MOVIMENTO = 8  # segundos de espera fixa após cada MovJ
@@ -34,6 +37,12 @@ TOLERANCIA_GRAUS = 0.5  # o robô "chegou" quando todas as juntas estão a menos
 TEMPO_MAXIMO_MOVIMENTO = 180  # desiste de esperar o robô chegar depois disso (s)
 COMMAND_TIMEOUT = 5.0  # segundos esperando a resposta do robô antes de considerar que ele parou de responder
 MODO_DRAG = 6  # RobotMode do controlador Dobot com o drag mode ligado
+# Drag mode vigiado: a cada leitura do estado (~25 por segundo), o robô é conferido
+# na posição atual e na posição prevista daqui a ANTECIPAR_DRAG_S (pela velocidade
+# das juntas), para travar ANTES de passar do campo, não depois.
+ANTECIPAR_DRAG_S = 0.15
+PIORA_PERMITIDA_MM = 5.0   # se já começou fora: pode voltar, mas não piorar mais que isto
+SEM_LEITURA_DRAG_S = 0.5   # em drag sem receber a posição por isto: desliga o drag
 TEMPO_PARADO_SEM_CHEGAR = 3.0  # se o robô fica parado esse tempo longe do destino, desiste (s)
 
 
@@ -137,7 +146,79 @@ class DobotActionServer(Node):
             SetBool, 'arrastar', self.arrastar_callback,
             callback_group=MutuallyExclusiveCallbackGroup())
 
+        # Drag mode vigiado: o robô é guiado com a mão, então não há comando para
+        # recusar; o servidor acompanha a posição e, se o robô for sair do campo
+        # de trabalho ou bater num obstáculo, desliga o drag (o robô trava).
+        self._drag_melhor = None            # menor "fora" desde que o drag ligou (mm)
+        self._drag_travado_em = 0.0
+        self.aviso_pub = self.create_publisher(String, '/dobot/aviso', 10)
+        grupo_drag = MutuallyExclusiveCallbackGroup()
+        self._ultimo_estado = 0.0
+        self.create_subscription(EstadoJuntas, '/dobot/estado_juntas', self._vigiar_drag, 10,
+                                 callback_group=grupo_drag)
+        # Sem leituras da posição, ninguém vigia o drag: ele é desligado.
+        self.create_timer(0.2, self._drag_sem_leitura, callback_group=grupo_drag)
+
         self.get_logger().info('dobot_action_server pronto. Aguardando chamada em /connect.')
+
+    # --- drag mode vigiado ---
+
+    def _drag_sem_leitura(self):
+        if (not self._arrastando or self.modo == 'sim' or self.dashboard is None
+                or time.monotonic() - self._drag_travado_em < 1.0):
+            return
+        if time.monotonic() - self._ultimo_estado <= SEM_LEITURA_DRAG_S:
+            return
+        self._drag_travado_em = time.monotonic()
+        self._drag_melhor = None
+        ok, msg_stop = self._sair_do_arrastar()
+        aviso = ('NÃO É SEGURO: drag mode desligado, o robô travou onde estava. A posição do '
+                 'robô parou de chegar, e sem ela não dá para conferir o campo de trabalho.')
+        if not ok:
+            aviso += f' ATENÇÃO: o robô não confirmou a saída do drag ({msg_stop}).'
+        self.get_logger().warn(aviso)
+        self.aviso_pub.publish(String(data=aviso))
+
+    def _vigiar_drag(self, msg):
+        """A cada estado do robô: com o drag mode ligado, confere a posição atual e
+        a prevista; se ela sair do campo (ou bater na mesa, paredes, teto), desliga o
+        drag e avisa a interface."""
+        self._ultimo_estado = time.monotonic()
+        em_drag = self._arrastando or int(getattr(msg, 'modo_robo', -1)) == MODO_DRAG
+        if (not em_drag or self.modo == 'sim' or self.dashboard is None
+                or self._seguranca is None or self.emergency_stop_flag):
+            self._drag_melhor = None
+            return
+        if time.monotonic() - self._drag_travado_em < 1.0:
+            return                          # acabou de travar: o robô ainda troca de modo
+        q = [float(v) for v in msg.angulo_graus]
+        vel = [float(v) for v in msg.velocidade_graus_s]
+        if not all(map(math.isfinite, q)):
+            return
+        futuro = [a + (b if math.isfinite(b) else 0.0) * ANTECIPAR_DRAG_S for a, b in zip(q, vel)]
+        try:
+            (agora, texto_agora), (depois, texto_depois) = self._seguranca.avaliar_posicoes(
+                [q, futuro])
+        except Exception as e:            # sem conferir, o drag não continua
+            agora, depois, texto_agora, texto_depois = float('inf'), 0.0, str(e), ''
+        if self._drag_melhor is None or agora < self._drag_melhor:
+            self._drag_melhor = agora
+        # Dentro do campo: limite = a tolerância. Já começou fora: pode voltar para
+        # dentro, mas não piorar.
+        limite = (TOLERANCIA_MM if self._drag_melhor <= TOLERANCIA_MM
+                  else self._drag_melhor + PIORA_PERMITIDA_MM)
+        if max(agora, depois) <= limite:
+            return
+        texto = texto_agora if agora >= depois else texto_depois
+        self._drag_travado_em = time.monotonic()
+        self._drag_melhor = None
+        ok, msg_stop = self._sair_do_arrastar()
+        aviso = ('NÃO É SEGURO: drag mode desligado, o robô travou onde estava. Do jeito que '
+                 f'estava indo, {texto}.')
+        if not ok:
+            aviso += f' ATENÇÃO: o robô não confirmou a saída do drag ({msg_stop}).'
+        self.get_logger().warn(aviso)
+        self.aviso_pub.publish(String(data=aviso))
 
     def _verificar_movimento(self, alvo, experimento=''):
         """Ponto único por onde todo movimento passa antes de ser enviado.

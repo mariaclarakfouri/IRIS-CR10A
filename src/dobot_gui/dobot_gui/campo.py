@@ -116,6 +116,10 @@ class Plano:
     def raio(self, ang):
         return _raio_poligono(self.contorno, ang)
 
+    def raios(self, angs):
+        """raio() para muitos ângulos (rad) de uma vez → (A,) mm."""
+        return _raios_poligono(self.contorno, angs)
+
 
 class Campo:
     """Campo de trabalho montado com as posições do flange (mm) nos pontos medidos.
@@ -156,6 +160,19 @@ class Campo:
             return False
         return math.hypot(x, y) <= self.raio(math.atan2(y, x), z) - folga_mm
 
+    def raios_grade(self, angs, zs):
+        """raio() numa grade (A, Z) de uma vez (alturas levadas para chão..topo)."""
+        angs = np.asarray(angs, float)
+        zs = np.clip(np.asarray(zs, float), self.chao_z, self.teto_z)
+        por_plano = np.array([p.raios(angs) for p in self.planos])          # (P, A)
+        i = np.clip(np.searchsorted(self._zs, zs) - 1, 0, len(self.planos) - 2)
+        za, zb = self._zs[i], self._zs[i + 1]
+        f = np.where(zb > za, np.clip((zs - za) / np.where(zb > za, zb - za, 1.0), 0.0, 1.0),
+                     0.0)
+        parede = (1 - f)[None, :] * por_plano[i].T + f[None, :] * por_plano[i + 1].T
+        alcance = np.where(zs > _ALC_Z[-1], 0.0, np.interp(zs, _ALC_Z, _ALC_R))
+        return np.minimum(parede, alcance[None, :])
+
     def malha(self, n_ang=96, por_vao=3):
         """Grade da superfície: (n_z, n_ang, 3) em mm, de baixo para cima, dando a
         volta no robô. Tem uma fila exatamente em cada plano medido (os índices
@@ -167,13 +184,16 @@ class Campo:
             zs.append(p.z)
             if i + 1 < len(self.planos):
                 zs += list(np.linspace(p.z, self.planos[i + 1].z, por_vao + 2)[1:-1])
-        g = np.empty((len(zs), n_ang, 3))
-        for i, z in enumerate(zs):
-            r = np.array([self.raio(a, z) for a in angs])
-            g[i, :, 0] = r * np.cos(angs)
-            g[i, :, 1] = r * np.sin(angs)
-            g[i, :, 2] = z
-        return g
+        return _grade_xyz(angs, np.asarray(zs, float), self.raios_grade(angs, zs))
+
+
+def _grade_xyz(angs, zs, r):
+    """Raios (A, Z) → pontos da superfície (Z, A, 3) em mm."""
+    g = np.empty((len(zs), len(angs), 3))
+    g[..., 0] = (r * np.cos(angs)[:, None]).T
+    g[..., 1] = (r * np.sin(angs)[:, None]).T
+    g[..., 2] = np.asarray(zs, float)[:, None]
+    return g
 
 
 def agrupar_planos(contorno_mm, referencias_mm=()):
@@ -256,19 +276,40 @@ class CampoDaBase:
         angs = np.linspace(-math.pi, math.pi, n_ang, endpoint=False)
         t = np.linspace(0.0, 1.0, n_z)
         zs = self.chao_z + (self.teto_z - self.chao_z) * (1 - (1 - t) ** 1.6)
-        g = np.empty((n_z, n_ang, 3))
-        for i, z in enumerate(zs):
-            r = np.array([self.raio(a, z) for a in angs])
-            g[i, :, 0] = r * np.cos(angs)
-            g[i, :, 1] = r * np.sin(angs)
-            g[i, :, 2] = z
         self.filas_planos = sorted({int(round(k)) for k in np.linspace(0, n_z - 1, self.N_ANEIS)})
-        return g
+        return _grade_xyz(angs, zs, self.raios_grade(angs, zs))
+
+    def raios_grade(self, angs, zs):
+        """raio() numa grade (A, Z) de uma vez (alturas levadas para chão..topo)."""
+        angs = np.asarray(angs, float)
+        zs = np.clip(np.asarray(zs, float), self.chao_z, self.teto_z)
+        alb = np.where((zs < _ALB_Z[0]) | (zs > _ALB_Z[-1]), 0.0, np.interp(zs, _ALB_Z, _ALB_R))
+        r = np.minimum(self.base.raios(angs)[:, None], alb[None, :])
+        if self.limite is not None:
+            r = np.minimum(r, self.limite.raios_grade(angs, zs))
+        return r
 
 
 def _em_volta(pts):
     """Pontos (N,3) em ordem de ângulo em volta do eixo do robô, só x e y."""
     return pts[np.argsort(np.arctan2(pts[:, 1], pts[:, 0])), :2]
+
+
+def _raios_poligono(p, angs):
+    """_raio_poligono para muitos ângulos de uma vez → (A,) mm (o cruzamento mais
+    perto, 0 se o raio não cruza o polígono)."""
+    angs = np.asarray(angs, float)
+    d = np.stack([np.cos(angs), np.sin(angs)], axis=1)          # (A, 2)
+    a = np.asarray(p, float)                                    # (N, 2)
+    e = np.roll(a, -1, axis=0) - a
+    det = d[:, None, 0] * (-e[None, :, 1]) - d[:, None, 1] * (-e[None, :, 0])
+    ok = np.abs(det) > 1e-12
+    det_s = np.where(ok, det, 1.0)
+    t = (a[None, :, 0] * (-e[None, :, 1]) - a[None, :, 1] * (-e[None, :, 0])) / det_s
+    s = (d[:, None, 0] * a[None, :, 1] - d[:, None, 1] * a[None, :, 0]) / det_s
+    valido = ok & (t > 0) & (s >= -1e-9) & (s <= 1 + 1e-9)
+    r = np.where(valido, t, np.inf).min(axis=1)
+    return np.where(np.isfinite(r), r, 0.0)
 
 
 def _raio_poligono(p, ang):
@@ -290,3 +331,112 @@ def _raio_poligono(p, ang):
         if t > 0 and -1e-9 <= s <= 1 + 1e-9:
             melhor = t if melhor is None else min(melhor, t)
     return 0.0 if melhor is None else float(melhor)
+
+
+# --- O volume de um corte (aba Campo do Experimento) ---------------------------
+#
+# O campo de um experimento é o campo geral DENTRO do corte (um polígono visto
+# de cima e uma faixa de alturas). Para desenhar esse volume exato, olha-se a
+# partir do eixo do robô: em cada direção θ e altura z, o trecho de cada raio que
+# está dentro do corte e dentro do campo (distância até r_campo(θ, z)). A borda
+# de fora desse trecho é a parede do corte onde ela é mais apertada, ou a borda
+# do campo onde ele é mais apertado: o desenho segue os dois certinho.
+
+def tabela_raio(campo, passo_graus=2.0, passo_mm=20.0):
+    """r_campo em grade (ângulos (A,) rad, alturas (Z,) mm, raio (A, Z) mm),
+    guardada no próprio campo (calcular leva uns décimos de segundo)."""
+    guardada = getattr(campo, '_tabela_raio', None)
+    if guardada is not None and guardada[0] == (passo_graus, passo_mm):
+        return guardada[1]
+    angs = np.radians(np.arange(-180.0, 180.0, passo_graus))
+    nz = max(2, int(math.ceil((campo.teto_z - campo.chao_z) / passo_mm)) + 1)
+    zs = np.linspace(campo.chao_z, campo.teto_z, nz)
+    r = campo.raios_grade(angs, zs)
+    campo._tabela_raio = ((passo_graus, passo_mm), (angs, zs, r))
+    return angs, zs, r
+
+
+def _intervalos_no_poligono(poli, angs):
+    """Para cada ângulo, os trechos [(a, b)] do raio saindo do eixo que ficam
+    dentro do polígono (N, 2), em mm, do mais perto para o mais longe."""
+    poli = np.asarray(poli, float)
+    a, e = poli, np.roll(poli, -1, axis=0) - poli
+    d = np.stack([np.cos(angs), np.sin(angs)], axis=1)
+    det = d[:, None, 0] * (-e[None, :, 1]) - d[:, None, 1] * (-e[None, :, 0])
+    ok = np.abs(det) > 1e-12
+    det_s = np.where(ok, det, 1.0)
+    t = (a[None, :, 0] * (-e[None, :, 1]) - a[None, :, 1] * (-e[None, :, 0])) / det_s
+    s = (d[:, None, 0] * a[None, :, 1] - d[:, None, 1] * a[None, :, 0]) / det_s
+    corta = ok & (t > 1e-9) & (s >= 0.0) & (s < 1.0)
+    # O eixo do robô está dentro do polígono? (raio para +x cruzando as bordas)
+    x0, y0 = poli[:, 0], poli[:, 1]
+    x1, y1 = np.roll(x0, -1), np.roll(y0, -1)
+    cruza = (y0 > 0) != (y1 > 0)
+    xc = x0 + (0 - y0) * (x1 - x0) / np.where(y1 - y0 == 0, 1e-12, y1 - y0)
+    eixo_dentro = int(np.sum(cruza & (xc > 0))) % 2 == 1
+    saida = []
+    for i in range(len(angs)):
+        ts = sorted(t[i][corta[i]].tolist())
+        if eixo_dentro:
+            ts = [0.0] + ts
+        saida.append([(ts[k], ts[k + 1]) for k in range(0, len(ts) - 1, 2)])
+    return saida
+
+
+def solido_do_corte(campo, poligono_mm, z_min_mm, z_max_mm, passo_graus=2.0, passo_z_mm=40.0):
+    """O volume do campo dentro do corte, para desenhar: (faces (K, 4, 3) mm,
+    linhas (S, 2, 3) mm). Vazio se o corte não pega nada do campo."""
+    vazio = (np.zeros((0, 4, 3)), np.zeros((0, 2, 3)))
+    if len(poligono_mm) < 3:
+        return vazio
+    angs, zt, rt = tabela_raio(campo, passo_graus)          # mesma grade de ângulos
+    z0 = max(float(z_min_mm), campo.chao_z)
+    z1 = min(float(z_max_mm), campo.teto_z)
+    if z1 <= z0:
+        return vazio
+    zs = np.linspace(z0, z1, max(2, int(math.ceil((z1 - z0) / passo_z_mm)) + 1))
+    # r_campo(θ, z) nas alturas do desenho (interpolando a tabela).
+    rz = np.array([np.interp(zs, zt, rt[i]) for i in range(len(angs))])     # (A, Z)
+    corte = _intervalos_no_poligono(poligono_mm, angs)
+    n_a, n_z = len(angs), len(zs)
+    # trechos[i][j] = [(a, b)] dentro do corte e do campo, no ângulo i e altura j
+    trechos = [[[(a, min(b, rz[i, j])) for a, b in corte[i] if min(b, rz[i, j]) > a + 1e-6]
+                for j in range(n_z)] for i in range(n_a)]
+    c, s = np.cos(angs), np.sin(angs)
+
+    def ponto(i, r, z):
+        return (r * c[i], r * s[i], z)
+
+    faces, linhas = [], []
+    for i in range(n_a):
+        k = (i + 1) % n_a
+        for j in range(n_z):
+            ti, tk = trechos[i][j], trechos[k][j]
+            mesma = len(ti) == len(tk) and len(ti) > 0
+            # Tampas de baixo e de cima.
+            if mesma and j in (0, n_z - 1):
+                for (a1, b1), (a2, b2) in zip(ti, tk):
+                    faces.append((ponto(i, a1, zs[j]), ponto(i, b1, zs[j]),
+                                  ponto(k, b2, zs[j]), ponto(k, a2, zs[j])))
+                    linhas.append((ponto(i, b1, zs[j]), ponto(k, b2, zs[j])))
+                    if a1 > 1e-6 or a2 > 1e-6:
+                        linhas.append((ponto(i, a1, zs[j]), ponto(k, a2, zs[j])))
+            # Paredes: a borda de fora (b) e, se o eixo ficar fora do corte, a de dentro (a).
+            if j + 1 < n_z:
+                ti2, tk2 = trechos[i][j + 1], trechos[k][j + 1]
+                if mesma and len(ti2) == len(ti) and len(tk2) == len(ti):
+                    for m in range(len(ti)):
+                        for lado in (1, 0):
+                            r00, r10 = ti[m][lado], tk[m][lado]
+                            r01, r11 = ti2[m][lado], tk2[m][lado]
+                            if lado == 0 and max(r00, r10, r01, r11) < 1e-6:
+                                continue
+                            faces.append((ponto(i, r00, zs[j]), ponto(k, r10, zs[j]),
+                                          ponto(k, r11, zs[j + 1]), ponto(i, r01, zs[j + 1])))
+                    # Uma linha vertical a cada 21°, para dar volume.
+                    if int(round(math.degrees(angs[i]))) % 21 == 0:
+                        for m in range(len(ti)):
+                            linhas.append((ponto(i, ti[m][1], zs[j]), ponto(i, ti2[m][1], zs[j + 1])))
+    if not faces:
+        return vazio
+    return np.asarray(faces, float), np.asarray(linhas, float).reshape(-1, 2, 3)

@@ -238,8 +238,9 @@ class CampoExperimento(Modulo):
         linha.addWidget(self._cartao_3d(), 1)
         self.layout_modulo.addLayout(linha, 1)
 
-        self._carregar_campo()
-        self._escolher_experimento()
+        # O campo e o desenho só são montados na primeira vez que a aba aparece
+        # (abrir a interface fica mais rápido).
+        self._montada = False
 
     # ------------------------------------------------------------------
     # Tela
@@ -319,8 +320,8 @@ class CampoExperimento(Modulo):
         return c
 
     def _cartao_3d(self):
-        c = Cartao('Robô 3D', 'Em azul, o campo de trabalho geral; em laranja, o corte. O campo '
-                              'do experimento é a parte azul dentro do laranja.')
+        c = Cartao('Robô 3D', 'Em azul, o campo de trabalho geral; em laranja, o campo deste '
+                              'experimento: a parte do campo geral que fica dentro do corte.')
         ponta = getattr(self.janela.ros_node, 'ponta', 'nada')
         self.robot_view = RobotView(ferramenta='celula' if ponta == 'celula' else None)
         self.robot_view.setMinimumHeight(460)
@@ -362,14 +363,18 @@ class CampoExperimento(Modulo):
         # Para a vista de cima: o maior alcance do campo em cada direção.
         angs = np.radians(np.arange(-180, 180, 2.0))
         zs = np.arange(self._campo.chao_z, self._campo.teto_z + 1e-6, 20.0)
-        r = np.array([max(self._campo.raio(a, z) for z in zs) for a in angs])
+        r = self._campo.raios_grade(angs, zs).max(axis=1)
         pegada = np.c_[r * np.cos(angs), r * np.sin(angs)]
         self.vista.definir_campo(pegada, self._campo.base.contorno)
 
     def showEvent(self, ev):
         super().showEvent(ev)
         self._carregar_campo()          # os pontos podem ter mudado (outra aba, sincronia)
-        self._atualizar()
+        if not self._montada:
+            self._montada = True
+            self._escolher_experimento()
+        else:
+            self._atualizar()
 
     # ------------------------------------------------------------------
     # Experimento e corte
@@ -426,6 +431,9 @@ class CampoExperimento(Modulo):
 
         if not corte['poligono_mm']:
             msg, ok = 'Nenhum canto marcado.', False
+            if self._salvo:
+                msg = ('Desenho vazio, mas o corte salvo continua valendo. Para usar o campo '
+                       'geral, clique em “Usar o campo geral”.')
         elif z0 is None or z1 is None:
             msg, ok = 'Escreva a altura mínima e a máxima.', False
         else:
@@ -460,6 +468,17 @@ class CampoExperimento(Modulo):
             self._atualizar()
 
     def _limpar(self):
+        """Limpa o desenho. Com um corte salvo, pergunta se é para apagá-lo também
+        e voltar ao campo geral (só limpar a tela não muda o que está valendo)."""
+        if self._salvo:
+            nome = self.experimento.currentText()
+            if self.janela.confirmar(
+                    'Limpar desenho',
+                    f'O experimento “{nome}” tem um corte salvo, que continua valendo até ser '
+                    'apagado.\n\nApagar o corte salvo e usar o campo de trabalho geral?',
+                    'Apagar e usar o campo geral'):
+                self._remover(perguntar=False)
+                return
         self.vista.definir_cantos([])
         self._atualizar()
 
@@ -492,9 +511,9 @@ class CampoExperimento(Modulo):
         self._avisar_abas()
         self._atualizar()
 
-    def _remover(self):
+    def _remover(self, perguntar=True):
         nome = self.experimento.currentText()
-        if not self.janela.confirmar(
+        if perguntar and not self.janela.confirmar(
                 'Usar o campo geral',
                 f'Apagar o corte do experimento “{nome}”? Ele volta a usar o campo de trabalho '
                 'geral inteiro.', 'Apagar o corte'):

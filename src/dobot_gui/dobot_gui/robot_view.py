@@ -20,8 +20,9 @@ from PyQt5.QtGui import (QColor, QFont, QPainter, QPainterPath, QPen, QPixmap, Q
                          QRadialGradient)
 from PyQt5.QtWidgets import QSizePolicy, QWidget
 
-from .campo import Campo, CampoDaBase
-from .robot3d_render import Camera, scene_normais, scene_triangles, shade_and_sort
+from .campo import Campo, CampoDaBase, solido_do_corte
+from .robot3d_render import (Camera, normais_suaves, scene_normais, scene_triangles,
+                              shade_and_sort)
 from .robot3d_scene import UrdfSceneError, parse_urdf
 
 JOINT_NAMES = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
@@ -29,7 +30,7 @@ JOINT_NAMES = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
 # o sinal invertido entre o modelo e os ângulos que o robô Dobot reporta.
 DOBOT_TO_URDF_SIGN = [-1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 
-TRIANGLE_BUDGET = 40000      # parado: malha detalhada (~17 mil triângulos; um quadro só)
+TRIANGLE_BUDGET = 30000      # parado: malha detalhada (~13 mil triângulos; um quadro só)
 # Movimento liso: enquanto o robô se mexe, o desenho usa um modelo mais leve
 # (bem menos triângulos, quase igual com o robô andando) e a posição é interpolada
 # entre as leituras, mostrada com um pequeno atraso para sempre haver uma leitura
@@ -40,7 +41,7 @@ ATRASO_S = 0.06               # o desenho fica este tempo atrás da última leit
 FIM_ZOOM_MS = 400             # zoom parado este tempo: volta ao modelo detalhado
 ZOOM_POR_DENTE = 0.88         # cada dente da roda: distância da câmera × isto
 ZOOM_SUAVE = 0.3              # a cada quadro anda esta fração do que falta (desliza)
-PARADO_S = 0.3                # sem mudar por este tempo: desenha o modelo detalhado
+PARADO_S = 1.0                # sem mudar por este tempo: desenha o modelo detalhado
 CR10_REACH_M = 1.375
 # Campo de trabalho (aba Campo de Trabalho): faces translúcidas, arestas e pontos.
 CAMPO_FACE = QColor(56, 189, 248, 38)
@@ -71,7 +72,8 @@ BACKGROUND = QColor('#0f172a')
 FUNDO_CENTRO = QColor('#1b2740')     # degradê do fundo: mais claro atrás do robô
 SOMBRA = QColor(2, 6, 16, 110)       # sombra do robô no chão
 MESA_FACE = QColor(217, 164, 101, 46)    # o tampo da mesa (translúcido)
-CORTE_FACE = QColor(249, 115, 22, 40)    # corte do campo de um experimento
+CORTE_FACE = QColor(249, 115, 22, 70)    # campo de um experimento (dentro do corte)
+CORTE_FACE_GIRANDO = QColor(249, 115, 22, 110)  # o mesmo, numa camada só (câmera girando)
 CORTE_ARESTA = QColor(251, 146, 60, 235)
 MESA_BORDA = QColor(217, 164, 101, 150)
 MESA_LADO_M = 1.6                        # o tampo desenhado vai até isto em volta do robô
@@ -166,7 +168,10 @@ def load_robot_scene(budget=TRIANGLE_BUDGET, ferramenta=None):
 # junto). O resultado depende só do URDF, do orçamento de triângulos e das
 # malhas, então fica guardado em ~/.cache e é só lido nas próximas vezes.
 PASTA_CACHE_3D = os.path.expanduser('~/.cache/iris/robo3d')
-VERSAO_CACHE_3D = 1
+VERSAO_CACHE_3D = 2          # 2: guarda também as normais suaves (o "liso")
+# Cenas já carregadas neste processo: os vários robôs 3D da interface usam a mesma
+# (só leitura), em vez de cada um carregar e preparar a sua.
+_CENAS = {}
 
 
 def _cena_com_cache(text, budget):
@@ -180,13 +185,21 @@ def _cena_com_cache(text, budget):
             h.update(f'{caminho}|{st.st_size}|{st.st_mtime_ns}'.encode())
         except OSError:
             h.update(f'{caminho}|?'.encode())
-    arquivo = os.path.join(PASTA_CACHE_3D, h.hexdigest() + '.pkl')
+    chave = h.hexdigest()
+    if chave in _CENAS:
+        return _CENAS[chave]
+    arquivo = os.path.join(PASTA_CACHE_3D, chave + '.pkl')
     try:
         with open(arquivo, 'rb') as f:
-            return pickle.load(f)
+            cena = pickle.load(f)
+        normais_suaves(cena)            # já vem pronta do arquivo (versão 2)
+        _CENAS[chave] = cena
+        return cena
     except Exception:
         pass
     cena = parse_urdf(text, triangle_budget=budget)
+    normais_suaves(cena)                # guardadas junto, no arquivo
+    _CENAS[chave] = cena
     try:
         os.makedirs(PASTA_CACHE_3D, exist_ok=True)
         tmp = arquivo + f'.{os.getpid()}.tmp'
@@ -377,50 +390,66 @@ class RobotView(QWidget):
         painter.drawPolygon(QPolygonF([QPointF(*p) for p in uv.tolist()]))
 
     def definir_corte(self, poligono_mm=None, z_min_mm=0.0, z_max_mm=0.0):
-        """Desenha o corte do campo de um experimento: o polígono (visto de cima,
-        mm) subindo de z_min a z_max, em laranja. None tira."""
-        if poligono_mm is None or len(poligono_mm) < 2:
-            self._corte = None
-        else:
-            p = np.asarray(poligono_mm, float) / 1000.0
-            self._corte = (p, float(z_min_mm) / 1000.0, float(z_max_mm) / 1000.0)
+        """Desenha, em laranja, o campo de um experimento: o campo de trabalho que
+        está DENTRO do corte (polígono visto de cima, mm, e faixa de alturas). Segue
+        a borda do campo e as paredes do corte certinho. Precisa do campo
+        (definir_campo) antes. None tira."""
+        self._corte = None
+        campo = self._campo[0] if self._campo else None
+        if poligono_mm is not None and len(poligono_mm) >= 3 and campo is not None:
+            faces, linhas = solido_do_corte(campo, poligono_mm, z_min_mm, z_max_mm,
+                                            passo_graus=3.0, passo_z_mm=60.0)
+            # Uma versão com menos faces para quando a câmera gira: o laranja
+            # continua preenchido, sem pesar no giro.
+            leves, _l = solido_do_corte(campo, poligono_mm, z_min_mm, z_max_mm,
+                                        passo_graus=6.0, passo_z_mm=150.0)
+            if len(faces):
+                self._corte = (faces / 1000.0, linhas / 1000.0,
+                               (leves if len(leves) else faces) / 1000.0)
         self.update()
 
-    def _draw_corte(self, painter, w, h, parte):
+    def _draw_corte(self, painter, w, h, parte, leve=False):
         corte = getattr(self, '_corte', None)
         if corte is None:
             return
-        p, z0, z1 = corte
-        n = len(p)
-        baixo = np.c_[p, np.full(n, z0)]
-        cima = np.c_[p, np.full(n, z1)]
+        faces, linhas, faces_leves = corte
         cam = self.camera
-        ub, db = cam.project(baixo, w, h)
-        uc, dc = cam.project(cima, w, h)
-        if np.any(db <= cam.near) or np.any(dc <= cam.near):
+        if parte == 'faces' and leve:
+            # Girando a câmera: o laranja vira um preenchimento só, no contorno do
+            # volume na tela (pintar face por face pesava no giro). Ao soltar,
+            # volta o preenchimento detalhado.
+            uv, d = cam.project(faces_leves.reshape(-1, 3), w, h)
+            uv = uv[d > cam.near]
+            if len(uv) >= 3:
+                try:
+                    from scipy.spatial import ConvexHull
+                    casca = uv[ConvexHull(uv).vertices]
+                except Exception:
+                    return
+                painter.setRenderHint(QPainter.Antialiasing, True)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(CORTE_FACE_GIRANDO)
+                painter.drawPolygon(QPolygonF([QPointF(*q) for q in casca.tolist()]))
             return
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        fechado = n >= 3
         if parte == 'faces':
-            if not fechado:
-                return
+            uv, d = cam.project(faces.reshape(-1, 3), w, h)
+            uv, d = uv.reshape(-1, 4, 2), d.reshape(-1, 4)
+            ok = (d > cam.near).all(axis=1)
+            painter.setRenderHint(QPainter.Antialiasing, False)
             painter.setPen(Qt.NoPen)
             painter.setBrush(CORTE_FACE)
-            for i in range(n):
-                k = (i + 1) % n
-                painter.drawPolygon(QPolygonF([QPointF(*ub[i]), QPointF(*ub[k]),
-                                               QPointF(*uc[k]), QPointF(*uc[i])]))
-            painter.drawPolygon(QPolygonF([QPointF(*q) for q in uc.tolist()]))
+            poligono, ponto, faces_q = painter.drawPolygon, QPointF, QPolygonF
+            for quad in uv[ok].tolist():          # mesma cor: a ordem não importa
+                poligono(faces_q([ponto(*q) for q in quad]))
             return
-        painter.setPen(QPen(CORTE_ARESTA, 2.0))
-        lados = range(n) if fechado else range(n - 1)
-        linhas = []
-        for i in lados:
-            k = (i + 1) % n
-            linhas += [QLineF(*ub[i], *ub[k]), QLineF(*uc[i], *uc[k])]
-        for i in range(n):
-            linhas.append(QLineF(*ub[i], *uc[i]))
-        painter.drawLines(linhas)
+        if not len(linhas):
+            return
+        uv, d = cam.project(linhas.reshape(-1, 3), w, h)
+        uv, d = uv.reshape(-1, 2, 2), d.reshape(-1, 2)
+        ok = (d > cam.near).all(axis=1)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(QPen(CORTE_ARESTA, 1.8))
+        painter.drawLines([QLineF(*a, *b) for a, b in uv[ok].tolist()])
 
     def flanges_mm(self, lista_deg):
         """Posição do flange (mm, referencial do robô) para cada lista de 6
@@ -564,8 +593,9 @@ class RobotView(QWidget):
         quadro = getattr(self, '_quadro_guardado', None)
         if (getattr(self, '_sujo', True) or quadro is None or chave != self._chave_quadro
                 or (quadro.width(), quadro.height()) != tamanho):
-            quadro = QPixmap(*tamanho)
-            quadro.setDevicePixelRatio(dpr)
+            if quadro is None or (quadro.width(), quadro.height()) != tamanho:
+                quadro = QPixmap(*tamanho)          # só cria de novo se o tamanho mudou
+                quadro.setDevicePixelRatio(dpr)
             p = QPainter(quadro)
             self._desenhar(p)
             p.end()
@@ -589,12 +619,34 @@ class RobotView(QWidget):
         self._draw_ground(painter, w, h)
         self._draw_mesa(painter, w, h)
         self._draw_sombra(painter, w, h)
-        self._draw_campo(painter, w, h, 'faces')
-        self._draw_corte(painter, w, h, 'faces')
+        self._camada(painter, w, h, 'faces')        # campo e corte atrás do robô
         self._draw_robot(painter, w, h)
-        self._draw_campo(painter, w, h, 'linhas')
-        self._draw_corte(painter, w, h, 'linhas')
+        self._camada(painter, w, h, 'linhas')       # e as linhas por cima
         self._draw_hud(painter, w, h)
+
+    def _camada(self, painter, w, h, parte):
+        """Campo e corte numa imagem guardada: eles só mudam com a câmera, o
+        tamanho, o campo ou o corte. Com o robô andando, a cada quadro só o robô é
+        desenhado de novo, e esta camada é colada pronta."""
+        if self._campo is None and getattr(self, '_corte', None) is None:
+            return
+        cam = self.camera
+        mexendo = self._camera_mexendo or self._anim_zoom.isActive()
+        chave = (parte, w, h, cam.az, cam.el, cam.dist, *np.asarray(cam.target).tolist(),
+                 id(self._campo), id(getattr(self, '_corte', None)), mexendo)
+        guardadas = self.__dict__.setdefault('_camadas', {})
+        item = guardadas.get(parte)
+        if item is None or item[0] != chave:
+            dpr = self.devicePixelRatioF()
+            img = QPixmap(round(w * dpr), round(h * dpr))
+            img.setDevicePixelRatio(dpr)
+            img.fill(Qt.transparent)
+            p = QPainter(img)
+            self._draw_campo(p, w, h, parte)
+            self._draw_corte(p, w, h, parte, leve=mexendo)   # girando: corte mais leve
+            p.end()
+            item = guardadas[parte] = (chave, img)
+        painter.drawPixmap(0, 0, item[1])
 
     def _draw_ground(self, painter, w, h):
         cam = self.camera

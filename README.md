@@ -59,8 +59,11 @@ A base da interface:
   malhas 3D): nenhuma peça pode descer abaixo do tampo da mesa (altura pelo ponto "mesa"),
   passar das paredes retas do computador e da esquerda, nem subir acima do teto. Paredes e
   teto ficam onde o corpo do robô chegou na medição (`PAREDES` e `TETO_MM` em
-  `dobot_gui/seguranca.py`). O drag mode
-  (guiar com a mão) não passa por essa conferência.
+  `dobot_gui/seguranca.py`). No drag mode
+  (guiar com a mão) não há comando para recusar: o servidor acompanha a posição do robô (~25
+  vezes por segundo, olhando também 0,15 s à frente pela velocidade) e, se ele for sair do
+  campo ou bater num obstáculo, desliga o drag e o robô trava onde está. Sem leitura da
+  posição por mais de 0,5 s, o drag também desliga.
 - **Registro** de tudo o que foi feito.
 - **Gêmeo virtual** do CR10A no Gazebo: no modo simulação, os comandos movem só o gêmeo, e
   o robô real não é tocado; no modo real, o gêmeo segue o robô.
